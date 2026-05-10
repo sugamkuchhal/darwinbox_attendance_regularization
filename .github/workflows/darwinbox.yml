@@ -40,7 +40,7 @@ jobs:
           DARWINBOX_EMPLOYEE_ID: ${{ secrets.DARWINBOX_EMPLOYEE_ID }}
           GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}      # auto-provided, no setup needed
           GITHUB_REPOSITORY:  ${{ github.repository }}         # auto-provided, no setup needed
-        run: node darwinbox_regularize.js
+        run: node index.js
 
       - name: 📸 Upload screenshots (for debugging)
         if: always()
