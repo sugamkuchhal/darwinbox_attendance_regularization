@@ -129,38 +129,43 @@ async function openTimeCorrectionPanel(page, date) {
     }
   } catch (_) {}
 
-  // Find the <tr> by exact date match, then click the ⋮ td
-  // ⋮ td confirmed class from logs: "default-cell row-level-context-menu dtfc..."
-  const clickResult = await page.evaluate((targetDate) => {
-    const rows = [...document.querySelectorAll("table tr")];
-    const row  = rows.find(r => {
-      const span = r.querySelector('td.primary-cell span[dir="auto"]');
-      return span && (span.innerText || "").trim() === targetDate;
-    });
-    if (!row) return { clicked: false, reason: "row not found — date span not matched" };
+  // Find the ⋮ td using Playwright locator for a real pointer event
+  // ⋮ td confirmed class: "row-level-context-menu" (from logs)
+  // We use page.locator scoped to the row identified by its date span
+  const rowLocator = page.locator('table tr').filter({
+    has: page.locator(`td.primary-cell span[dir="auto"]:text-is("${date}")`)
+  });
 
-    // The ⋮ td has class "row-level-context-menu" — confirmed from tdClasses log
-    const menuTd = row.querySelector('td.row-level-context-menu');
-    if (menuTd) {
-      menuTd.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      return { clicked: true, reason: "row-level-context-menu td clicked" };
-    }
+  const rowCount = await rowLocator.count();
+  console.log(`   🔍 Row locator matched ${rowCount} row(s) for ${date}`);
+  if (rowCount === 0) throw new Error(`Row not found for date ${date}`);
 
-    const tdClasses = [...row.querySelectorAll("td")].map(td => td.className.slice(0, 50));
-    return { clicked: false, reason: "row-level-context-menu td not found", tdClasses };
-  }, date);
+  // Click the ⋮ td with a real Playwright pointer event (not dispatchEvent)
+  const menuTd = rowLocator.locator('td.row-level-context-menu');
+  const menuCount = await menuTd.count();
+  console.log(`   🔍 ⋮ td matched ${menuCount} element(s)`);
+  if (menuCount === 0) throw new Error("row-level-context-menu td not found in row");
 
-  console.log(`   🔍 ⋮ click: ${JSON.stringify(clickResult)}`);
-  if (!clickResult.clicked) {
-    throw new Error(`Could not click ⋮ for ${date}: ${clickResult.reason}`);
-  }
-
+  await menuTd.click({ timeout: 5000 });
+  console.log(`   ✅ ⋮ clicked via Playwright locator`);
   await sleep(1000);
 
-  // Click "Time Correction" from the dropdown — use the last match to avoid badge elements
-  const tcItems = await page.$$('text="Time Correction"');
-  if (tcItems.length === 0) throw new Error("Time Correction option not found in dropdown");
-  await tcItems[tcItems.length - 1].click();
+  // Click "Time Correction" from the dropdown
+  // Use the dropdown item — it appears in a popup/overlay after ⋮ is clicked
+  // Filter to visible elements only to avoid clicking hidden badge text
+  const tcLocator = page.locator('text="Time Correction"').filter({ hasNotText: "Request" });
+  const tcCount = await tcLocator.count();
+  console.log(`   🔍 Time Correction items: ${tcCount}`);
+
+  if (tcCount > 0) {
+    await tcLocator.first().click({ timeout: 5000 });
+  } else {
+    // Fallback: click the last visible "Time Correction" text
+    const allTc = page.locator('text="Time Correction"');
+    const total = await allTc.count();
+    if (total === 0) throw new Error("Time Correction option not found in dropdown");
+    await allTc.nth(total - 1).click({ timeout: 5000 });
+  }
   await sleep(2000);
   console.log(`   ✅ Time Correction panel opened`);
 }
