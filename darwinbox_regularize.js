@@ -28,8 +28,8 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-//  "MFA_PUSH",
-//  "MFA_CODE",
+  "MFA_PUSH",
+  "MFA_CODE",
   "CALL",
   "TEXT",
 ];
@@ -476,22 +476,53 @@ async function run() {
     await page.screenshot({ path: "list_view.png" });
 
     // ── Step 8: Find all absent rows with no pending request ──────────────
+    // Strategy: read each table row individually, check ONLY the specific cells
+    // for Attendance status and Request Status — not the full row text.
+    // This prevents false positives from child elements or hidden DOM text.
     console.log("🔍 Scanning for absent days with no pending request...");
 
-    // Collect all rows from the attendance table
     const absentDates = await page.evaluate(() => {
-      const rows = [...document.querySelectorAll("tr, [class*='row']:not([class*='header'])")];
       const results = [];
+      const seen = new Set(); // deduplicate dates
+
+      // Target the main attendance table rows
+      // Each row has cells: checkbox | date | attendance | ⋮ | request-status | time-in | time-out | ...
+      const rows = [...document.querySelectorAll("tr.db-table-row, tr[class*='table-row'], div.db-table-row")];
+
       for (const row of rows) {
-        const text = row.innerText || "";
-        // Must contain "Absent" 
-        if (!text.includes("Absent")) continue;
-        // Must NOT have a pending request (no "Request Pending" or "Time Correction" badge)
-        if (text.includes("Request Pending") || text.includes("Time Correction")) continue;
-        // Extract the date — format DD-MM-YYYY
-        const dateMatch = text.match(/\d{2}-\d{2}-\d{4}/);
-        if (dateMatch) results.push(dateMatch[0]);
+        // Get all direct cell children (td or div cells)
+        const cells = [...row.querySelectorAll("td, .db-table-cell, [class*='table-cell']")];
+        if (cells.length < 3) continue;
+
+        // Find the cell that contains ONLY the attendance status (Present/Absent/Weekly Off)
+        // It contains an icon + text, no date
+        let attendanceText = "";
+        let dateText = "";
+        let requestStatusText = "";
+
+        for (const cell of cells) {
+          const text = (cell.innerText || "").trim();
+          // Date cell: matches DD-MM-YYYY exactly
+          if (/^\d{2}-\d{2}-\d{4}$/.test(text)) {
+            dateText = text;
+          }
+          // Attendance cell: contains exactly one of these statuses (with possible icon prefix)
+          if (text.includes("Absent") && !text.includes("-")) {
+            attendanceText = "Absent";
+          }
+          // Request status cell
+          if (text.includes("Request Pending") || text.includes("Time Correction")) {
+            requestStatusText = text;
+          }
+        }
+
+        if (!dateText || attendanceText !== "Absent") continue;
+        if (requestStatusText) continue; // already has a pending request
+        if (seen.has(dateText)) continue; // deduplicate
+        seen.add(dateText);
+        results.push(dateText);
       }
+
       return results;
     });
 
@@ -511,107 +542,108 @@ async function run() {
       console.log(`
 📝 Processing: ${date}`);
 
-      // Generate random punch times for this day
       const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
       const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
+      const [inHour, inMin]   = punchInTime.split(":");
+      const [outHour, outMin] = punchOutTime.split(":");
       console.log(`   Punch-in: ${punchInTime} | Punch-out: ${punchOutTime}`);
 
-      // Find the row for this date and click its ⋮ menu
+      // ── Ensure no modal is open before starting ─────────────────────────
+      // Close any leftover panel from a previous iteration
       try {
-        // Click the three-dot menu on the row matching this date
-        const rowHandle = await page.evaluateHandle((targetDate) => {
-          const rows = [...document.querySelectorAll("tr, [class*='row']")];
-          return rows.find(r => (r.innerText || "").includes(targetDate)) || null;
+        const modal = await page.$("dbx-ds-modal");
+        if (modal) {
+          await page.click('dbx-ds-modal button:has-text("Cancel"), dbx-ds-modal [aria-label*="close"], dbx-ds-modal .close', { timeout: 2000 });
+          await sleep(1000);
+          console.log("   🔄 Closed leftover panel from previous row");
+        }
+      } catch (_) {}
+
+      // ── Click ⋮ on the correct row ──────────────────────────────────────
+      try {
+        // Find the row whose date cell exactly matches our target date
+        const clicked = await page.evaluate((targetDate) => {
+          const rows = [...document.querySelectorAll("tr.db-table-row, div.db-table-row, tr[class*='table-row']")];
+          for (const row of rows) {
+            const cells = [...row.querySelectorAll("td, .db-table-cell, [class*='table-cell']")];
+            const hasDate = cells.some(c => (c.innerText || "").trim() === targetDate);
+            if (!hasDate) continue;
+            // Find and click the ⋮ button in this row
+            const btn = row.querySelector("button");
+            if (btn) { btn.click(); return true; }
+          }
+          return false;
         }, date);
 
-        if (!rowHandle || !(await rowHandle.asElement())) {
-          console.warn(`   ⚠️ Could not find row for ${date} — skipping`);
+        if (!clicked) {
+          console.warn(`   ⚠️ Could not find/click ⋮ for ${date} — skipping`);
+          await page.screenshot({ path: `error_${date}.png` });
           continue;
-        }
-
-        // Click the ⋮ button within that row
-        const menuBtn = await rowHandle.$('button, [class*="menu"], [class*="dots"], [aria-label*="more"], [aria-label*="action"]');
-        if (menuBtn) {
-          await menuBtn.click();
-        } else {
-          // Fallback: find by text position
-          await page.click(`text="${date}" >> .. >> button`, { timeout: 3000 }).catch(() => {});
         }
         await sleep(1000);
 
-        // Click "Time Correction" from the dropdown menu
+        // Click "Time Correction" from the dropdown
         await page.click('text="Time Correction"', { timeout: 3000 });
         await sleep(2000);
         console.log(`   ✅ Time Correction panel opened`);
 
       } catch (err) {
-        console.warn(`   ⚠️ Could not open Time Correction for ${date}: ${err.message}`);
+        console.warn(`   ⚠️ Could not open panel for ${date}: ${err.message}`);
         await page.screenshot({ path: `error_${date}.png` });
+        // Ensure panel is closed before next iteration
+        try { await page.keyboard.press("Escape"); } catch (_) {}
+        await sleep(1000);
         continue;
       }
 
-      // ── Fill the Time Correction form ──────────────────────────────────
+      // ── Fill form — scoped to the modal panel ───────────────────────────
       try {
-        // Clock In Time — hour and minute spinners
-        // Clear and set hour spinner for punch-in
-        const [inHour, inMin] = punchInTime.split(":");
-        const [outHour, outMin] = punchOutTime.split(":");
+        // Wait for modal to be fully visible
+        await page.waitForSelector("dbx-ds-modal", { timeout: 5000 });
 
-        // Spinners are input[type="number"] or custom spinners — try both
-        const spinners = await page.$$('input[type="number"], [class*="spinner"] input, [class*="time"] input');
-        console.log(`   🔢 Found ${spinners.length} spinner inputs`);
+        // Get all spinners SCOPED to the modal only
+        const modal = page.locator("dbx-ds-modal");
+        const spinners = modal.locator('input[type="number"]');
+        const spinnerCount = await spinners.count();
+        console.log(`   🔢 Found ${spinnerCount} spinner inputs in modal`);
 
-        if (spinners.length >= 4) {
-          // Expected order: ClockIn-Hour, ClockIn-Min, ClockOut-Hour, ClockOut-Min
-          await spinners[0].click({ clickCount: 3 });
-          await spinners[0].fill(inHour);
-          await sleep(300);
-          await spinners[1].click({ clickCount: 3 });
-          await spinners[1].fill(inMin);
-          await sleep(300);
-          await spinners[2].click({ clickCount: 3 });
-          await spinners[2].fill(outHour);
-          await sleep(300);
-          await spinners[3].click({ clickCount: 3 });
-          await spinners[3].fill(outMin);
-          await sleep(300);
+        if (spinnerCount >= 4) {
+          // Order in form: ClockIn-Hour [0], ClockIn-Min [1], ClockOut-Hour [2], ClockOut-Min [3]
+          // (Break Duration spinners [4],[5] are left as 00)
+          await spinners.nth(0).click({ clickCount: 3 }); await spinners.nth(0).fill(inHour);  await sleep(300);
+          await spinners.nth(1).click({ clickCount: 3 }); await spinners.nth(1).fill(inMin);   await sleep(300);
+          await spinners.nth(2).click({ clickCount: 3 }); await spinners.nth(2).fill(outHour); await sleep(300);
+          await spinners.nth(3).click({ clickCount: 3 }); await spinners.nth(3).fill(outMin);  await sleep(300);
+          console.log(`   ✅ Times filled`);
         } else {
-          // Try direct triple-click + type approach with labels
-          await fillSpinnerByLabel(page, "Clock In Time", inHour, inMin);
-          await fillSpinnerByLabel(page, "Clock Out Time", outHour, outMin);
+          console.warn(`   ⚠️ Expected ≥4 spinners, found ${spinnerCount}`);
         }
 
-        // Location — should already be "Office", verify
-        const locationVal = await page.$eval(
-          '[class*="location"] [class*="select__single-value"], [class*="Location"] [class*="value"]',
-          el => el.innerText
-        ).catch(() => "");
-        console.log(`   📍 Location: ${locationVal || "pre-filled"}`);
-
-        // Reason dropdown — custom react-select style
-        await page.click('text="Select Reason"', { timeout: 3000 });
+        // Reason dropdown — scoped to modal
+        await modal.locator('text="Select Reason"').click({ timeout: 3000 });
         await sleep(500);
         await page.click(`text="${REASON}"`, { timeout: 3000 });
-        console.log(`   ✅ Reason: "${REASON}"`);
+        console.log(`   ✅ Reason selected: "${REASON}"`);
         await sleep(500);
 
-        // Screenshot before submit
         await page.screenshot({ path: `before_submit_${date}.png` });
 
-        // Submit
-        await page.click('button:has-text("Submit")', { timeout: 5000 });
-        await sleep(2000);
+        // Submit — scoped to modal
+        await modal.locator('button:has-text("Submit")').click({ timeout: 5000 });
+        await sleep(3000);
         console.log(`   ✅ Submitted for ${date}`);
         await page.screenshot({ path: `submitted_${date}.png` });
 
-        // Wait for panel to close before next row
-        await sleep(2000);
+        // Wait for modal to close
+        await page.waitForSelector("dbx-ds-modal", { state: "hidden", timeout: 5000 }).catch(() => {});
+        await sleep(1000);
 
       } catch (err) {
         console.warn(`   ⚠️ Error filling form for ${date}: ${err.message}`);
         await page.screenshot({ path: `form_error_${date}.png` });
-        // Try to close the panel and continue with next date
-        try { await page.click('button:has-text("Cancel"), button[aria-label*="close"], .close-btn', { timeout: 2000 }); } catch (_) {}
+        // Force close modal before next row
+        try { await page.keyboard.press("Escape"); await sleep(500); } catch (_) {}
+        try { await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 }); } catch (_) {}
         await sleep(1000);
       }
     }
