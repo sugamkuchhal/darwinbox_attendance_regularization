@@ -153,31 +153,36 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   ✅ ⋮ clicked`);
   await sleep(1000);
 
-  // Click "Time Correction" from the dropdown
-  // After ⋮ is clicked, a context menu appears with exactly 2 items: "Time Correction" and "Attendance Register"
-  // We wait for it to be visible then click it
-  await page.waitForFunction(() => {
-    const items = [...document.querySelectorAll("li, [role='menuitem'], [class*='context'] div, [class*='dropdown'] div")];
-    return items.some(el => (el.innerText || "").trim() === "Time Correction" && el.offsetParent !== null);
-  }, { timeout: 3000 }).catch(() => {});
+  // The dropdown has exactly 2 items: "Time Correction" and "Attendance Register"
+  // It's a simple popup — find it by looking for the element containing both items
+  // then click the "Time Correction" item within it
+  await sleep(500); // let dropdown render
 
-  // Click the visible "Time Correction" — filter by visible only
-  const allTc = page.locator('text="Time Correction"');
-  const total = await allTc.count();
-  console.log(`   🔍 "Time Correction" in DOM: ${total}`);
-  if (total === 0) throw new Error("Time Correction not found");
-
-  // Find which one is visible (the dropdown item)
-  for (let i = 0; i < total; i++) {
-    const isVisible = await allTc.nth(i).isVisible();
-    if (isVisible) {
-      const box = await allTc.nth(i).boundingBox();
-      // The dropdown item will be near the clicked ⋮ — not in the table body
-      console.log(`   🔍 Visible TC item ${i}: box=${JSON.stringify(box)}`);
+  // Strategy: find visible element with EXACTLY the text "Time Correction"
+  // that is NOT inside the table (i.e., not a badge) — it will have no sibling badge text
+  const clicked = await page.evaluate(() => {
+    // Find all elements whose direct trimmed text is exactly "Time Correction"
+    const all = [...document.querySelectorAll("*")];
+    for (const el of all) {
+      // Must be visible
+      if (!el.offsetParent) continue;
+      // Direct text content must be exactly "Time Correction"
+      const directText = [...el.childNodes]
+        .filter(n => n.nodeType === 3)
+        .map(n => n.textContent.trim())
+        .join("");
+      if (directText !== "Time Correction") continue;
+      // Must NOT be inside the table (badge elements are in table)
+      if (el.closest("table")) continue;
+      // Click it
+      el.click();
+      return true;
     }
-  }
-  // Click the last visible one — dropdown appends after existing badge elements
-  await allTc.nth(total - 1).click({ timeout: 5000, force: false });
+    return false;
+  });
+
+  console.log(`   🔍 Dropdown "Time Correction" click: ${clicked}`);
+  if (!clicked) throw new Error("Could not find Time Correction dropdown item outside table");
   await sleep(2000);
   console.log(`   ✅ Time Correction panel opened`);
 }
