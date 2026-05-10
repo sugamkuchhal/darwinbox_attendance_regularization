@@ -15,7 +15,7 @@ permissions:
 jobs:
   regularize:
     runs-on: ubuntu-latest
-    timeout-minutes: 25  # Extra time to accommodate 15-min OTP wait
+    timeout-minutes: 30
 
     steps:
       - name: ⬇️ Checkout repository
@@ -37,11 +37,8 @@ jobs:
           DARWINBOX_URL:      ${{ secrets.DARWINBOX_URL }}
           DARWINBOX_USERNAME: ${{ secrets.DARWINBOX_USERNAME }}
           DARWINBOX_PASSWORD: ${{ secrets.DARWINBOX_PASSWORD }}
-          PUNCH_IN_TIME:      ${{ secrets.PUNCH_IN_TIME }}
-          PUNCH_OUT_TIME:     ${{ secrets.PUNCH_OUT_TIME }}
-          REGULARIZE_REASON:  ${{ secrets.REGULARIZE_REASON }}
-          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}       # auto-provided, no setup needed
-          GITHUB_REPOSITORY:  ${{ github.repository }}          # auto-provided, no setup needed
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}      # auto-provided, no setup needed
+          GITHUB_REPOSITORY:  ${{ github.repository }}         # auto-provided, no setup needed
         run: node darwinbox_regularize.js
 
       - name: 📸 Upload screenshots (for debugging)
