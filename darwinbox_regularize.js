@@ -14,7 +14,7 @@ const PUNCH_IN_BASE_HOUR  = 9;
 const PUNCH_OUT_BASE_HOUR = 18;
 const PUNCH_RANDOM_MAX    = 30;  // max random minutes added to base hour
 const REASON              = "Forgot To Punch";
-const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before falling back
+const WAIT_MINUTES        = 1;   // minutes to wait per MFA method before falling back
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── MFA METHOD ORDER ─────────────────────────────────────────────────────────
