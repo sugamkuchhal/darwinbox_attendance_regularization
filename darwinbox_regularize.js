@@ -28,8 +28,8 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-//  "MFA_PUSH",
-//  "MFA_CODE",
+  "MFA_PUSH",
+  "MFA_CODE",
   "CALL",
   "TEXT",
 ];
@@ -433,23 +433,40 @@ async function run() {
     console.log("📋 Switching to list view...");
 
     // Find the list view button by its unique SVG viewBox "0 0 12 10" (3-line descending icon)
-    // This is the exact SVG used by Darwinbox for the list toggle
     let listViewClicked = false;
     try {
-      listViewClicked = await page.evaluate(() => {
-        const svgs = [...document.querySelectorAll("svg")];
-        const listSvg = svgs.find(s => s.getAttribute("viewBox") === "0 0 12 10");
-        if (listSvg) {
-          // Click the closest button ancestor
-          const btn = listSvg.closest("button") || listSvg.parentElement;
-          if (btn) { btn.click(); return true; }
-        }
-        return false;
-      });
-      if (listViewClicked) {
-        console.log("✅ List view toggled via SVG viewBox selector");
+      // Use Playwright's locator to find the SVG and click its button parent
+      // page.locator finds the element; .click() dispatches a real browser event
+      const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
+      const count = await listSvg.count();
+      console.log(`🔍 Found ${count} SVG(s) with viewBox="0 0 12 10"`);
+      if (count > 0) {
+        // Click the button that contains this SVG
+        await listSvg.locator("..").click({ timeout: 3000 }); // ".." = parent element
+        console.log("✅ List view toggled via SVG locator");
+        listViewClicked = true;
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn(`⚠️ SVG locator click failed: ${err.message}`);
+    }
+
+    if (!listViewClicked) {
+      // Last resort: use dispatchEvent to simulate a real click on the SVG button
+      try {
+        const clicked = await page.evaluate(() => {
+          const svg = document.querySelector('svg[viewBox="0 0 12 10"]');
+          if (!svg) return false;
+          const btn = svg.closest("button") || svg.parentElement;
+          if (!btn) return false;
+          btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          return true;
+        });
+        if (clicked) {
+          console.log("✅ List view toggled via dispatchEvent");
+          listViewClicked = true;
+        }
+      } catch (_) {}
+    }
 
     if (!listViewClicked) {
       console.warn("⚠️ Could not toggle list view — proceeding anyway");
