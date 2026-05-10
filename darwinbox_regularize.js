@@ -28,10 +28,10 @@ const REASON              = "Forgot To Punch";
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-  "MFA_PUSH",
-  "MFA_CODE",
+#  "MFA_PUSH",
+#  "MFA_CODE",
   "CALL",
-  "TEXT",
+#  "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
