@@ -72,12 +72,11 @@ async function findAbsentDates(page) {
       const dateStr = (dateSpan.innerText || "").trim();
       if (!/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) continue;
 
-      if (seen.has(dateStr))        { skipped.push({ date: dateStr, reason: "duplicate" }); continue; }
-      if (toNum(dateStr) > todayNum){ skipped.push({ date: dateStr, reason: "future date" }); continue; }
+      if (seen.has(dateStr))         { skipped.push({ date: dateStr, reason: "duplicate" }); continue; }
+      if (toNum(dateStr) >= todayNum){ skipped.push({ date: dateStr, reason: "today or future — skip" }); continue; }
       seen.add(dateStr);
 
       // Attendance status: read span text directly, excluding hover panel content
-      // Hover panel has slot="hover" — exclude all descendants of that slot
       const statusSpans = [...row.querySelectorAll("span")].filter(
         s => !s.closest('[slot="hover"]')
       );
@@ -90,9 +89,13 @@ async function findAbsentDates(page) {
         }
       }
 
-      // Request status badge
+      // Request status: check ONLY tds after the ⋮ column (row-level-context-menu)
+      // From confirmed td classes: bulk-select | date | attendance | ⋮(row-level-context-menu) | badge tds...
+      // We skip the first 4 tds and check the rest for badge text
       let requestStatus = "";
-      for (const td of tds) {
+      const menuTdIndex = tds.findIndex(td => td.className.includes("row-level-context-menu"));
+      const badgeTds = menuTdIndex >= 0 ? tds.slice(menuTdIndex + 1) : tds.slice(4);
+      for (const td of badgeTds) {
         const t = (td.innerText || "").trim();
         if (t.includes("Request Pending") || t.includes("Time Correction")) {
           requestStatus = t.slice(0, 60);
@@ -138,8 +141,8 @@ async function openTimeCorrectionPanel(page, date) {
     }
   } catch (_) {}
 
-  // Find the <tr> by exact date match in td.primary-cell > span[dir="auto"]
-  // Then click the ⋮ td — identified by SVG paths with fill="var(--icon-color)"
+  // Find the <tr> by exact date match, then click the ⋮ td
+  // ⋮ td confirmed class from logs: "default-cell row-level-context-menu dtfc..."
   const clickResult = await page.evaluate((targetDate) => {
     const rows = [...document.querySelectorAll("table tr")];
     const row  = rows.find(r => {
@@ -148,18 +151,15 @@ async function openTimeCorrectionPanel(page, date) {
     });
     if (!row) return { clicked: false, reason: "row not found — date span not matched" };
 
-    const tds = [...row.querySelectorAll("td")];
-    for (const td of tds) {
-      const hasIconColor = [...td.querySelectorAll("path")]
-        .some(p => (p.getAttribute("fill") || "").includes("icon-color"));
-      if (hasIconColor) {
-        td.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-        return { clicked: true, reason: "icon-color td clicked" };
-      }
+    // The ⋮ td has class "row-level-context-menu" — confirmed from tdClasses log
+    const menuTd = row.querySelector('td.row-level-context-menu');
+    if (menuTd) {
+      menuTd.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      return { clicked: true, reason: "row-level-context-menu td clicked" };
     }
 
-    const tdClasses = tds.map(td => td.className.slice(0, 40));
-    return { clicked: false, reason: "no icon-color td found", tdClasses };
+    const tdClasses = [...row.querySelectorAll("td")].map(td => td.className.slice(0, 50));
+    return { clicked: false, reason: "row-level-context-menu td not found", tdClasses };
   }, date);
 
   console.log(`   🔍 ⋮ click: ${JSON.stringify(clickResult)}`);
