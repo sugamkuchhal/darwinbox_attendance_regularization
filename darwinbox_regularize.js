@@ -30,7 +30,7 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 const MFA_METHOD_ORDER = [
 //  "MFA_PUSH",
 //  "MFA_CODE",
-//  "CALL",
+  "CALL",
   "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,55 +432,27 @@ async function run() {
     // ── Step 7: Switch to list view ───────────────────────────────────────
     console.log("📋 Switching to list view...");
 
-    // Scroll to top first so the view toggle buttons are visible
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await sleep(1000);
-
-    // The list view is the second icon in the top-right toggle group (after calendar icon)
-    // From the screenshot: two icons side by side near top-right of the attendance section
+    // Find the list view button by its unique SVG viewBox "0 0 12 10" (3-line descending icon)
+    // This is the exact SVG used by Darwinbox for the list toggle
     let listViewClicked = false;
-    const listSelectors = [
-      'button[aria-label*="list"]',
-      'button[title*="list"]',
-      'button[title*="List"]',
-      'button[aria-label*="List"]',
-      // The list icon SVG button — try clicking each button in the icon group
-    ];
-    for (const sel of listSelectors) {
-      try {
-        await page.click(sel, { timeout: 2000 });
-        console.log(`✅ List view toggled via: ${sel}`);
-        listViewClicked = true;
-        break;
-      } catch (_) {}
-    }
-
-    if (!listViewClicked) {
-      // Fallback: find all small icon-only buttons near top-right and click the second one
-      // (first = calendar, second = list)
-      try {
-        const allBtns = await page.$$('button');
-        // Filter to buttons that are small (icon-only, no text)
-        for (const btn of allBtns) {
-          const txt = await btn.evaluate(el => el.innerText.trim());
-          const box = await btn.boundingBox();
-          if (txt === "" && box && box.width < 60 && box.height < 60) {
-            // Click each small button and check if the view changes to list
-            await btn.click();
-            await sleep(800);
-            const hasTable = await page.$("table, [class*='list'] tr, [class*='attendance-list']").catch(() => null);
-            if (hasTable) {
-              console.log("✅ List view activated via icon button fallback");
-              listViewClicked = true;
-              break;
-            }
-          }
+    try {
+      listViewClicked = await page.evaluate(() => {
+        const svgs = [...document.querySelectorAll("svg")];
+        const listSvg = svgs.find(s => s.getAttribute("viewBox") === "0 0 12 10");
+        if (listSvg) {
+          // Click the closest button ancestor
+          const btn = listSvg.closest("button") || listSvg.parentElement;
+          if (btn) { btn.click(); return true; }
         }
-      } catch (__) {}
-    }
+        return false;
+      });
+      if (listViewClicked) {
+        console.log("✅ List view toggled via SVG viewBox selector");
+      }
+    } catch (_) {}
 
     if (!listViewClicked) {
-      console.warn("⚠️ Could not toggle list view — proceeding anyway, will scan what's visible");
+      console.warn("⚠️ Could not toggle list view — proceeding anyway");
     }
 
     await sleep(2000);
