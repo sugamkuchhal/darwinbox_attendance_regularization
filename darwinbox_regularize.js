@@ -27,10 +27,10 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-//  "MFA_PUSH",
-//  "MFA_CODE",
+  "MFA_PUSH",
+  "MFA_CODE",
   "CALL",
-//  "TEXT",
+  "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -228,49 +228,33 @@ async function tryCall(page) {
   const LABEL = "CALL";
   console.log(`\n📞 [${LABEL}] Triggering voice call to registered phone number...`);
 
-  // Dump visible element text for selector debugging
-  const visibleText = await page.evaluate(() =>
-    [...document.querySelectorAll("div, li, a, td, span")]
-      .map(el => el.innerText?.trim())
-      .filter(t => t && t.length < 100)
-      .slice(0, 30)
-  ).catch(() => []);
-  console.log("🔍 Elements on screen:", visibleText.join(" | "));
-  await page.screenshot({ path: "before_call_click.png" });
-
-  // Screenshot shows two plain rows: row1=Text, row2=Call — target by text content and position
   await clickOption(page, [
-    '[data-bind*="OneWayVoiceMobile"]',
     '[data-value*="Voice"]',
+    '[data-bind*="OneWayVoiceMobile"]',
     '[data-value*="voice"]',
-    'div.row:nth-child(2)',          // Call is the 2nd row on the picker screen
-    'li:nth-child(2)',
-    ':nth-match(div.row, 2)',
-    'div:has(> span:has-text("Call +"))',
-    'div:has(> div:has-text("Call +"))',
-    'td:has-text("Call +")',
-    'a:has-text("Call +")',
-    // Broad fallback — find any element whose direct text includes "Call +"
-    'div >> text=/Call \+/',
   ], LABEL);
   await sleep(2000);
 
+  // After clicking Call, Microsoft dials your phone — you answer and press # to confirm.
+  // The page then moves forward automatically (no code to enter).
+  // We notify you via GitHub Issue and poll the page for navigation, same as MFA_PUSH.
   const issueNumber = await createGitHubIssue(
-    "🔐 [Call] Answer your phone and enter the OTP",
-    `## Darwinbox automation: Voice call OTP needed\n\n` +
-    `A **voice call** is being made to your registered phone number.\n\n` +
-    `**👉 Answer the call, note the OTP, then reply here with just the digits** (e.g. \`123456\`)\n\n` +
-    `⏰ You have **${WAIT_MINUTES} minute(s)** to respond.`
+    "📞 [Call] Answer your phone to approve Darwinbox sign-in",
+    `## Darwinbox automation: Voice call approval needed\n\n` +
+    `Your phone is being called now.\n\n` +
+    `**👉 Answer the call and follow the instructions (press # to approve).**\n\n` +
+    `⏰ You have **${WAIT_MINUTES * 60} seconds**. No reply needed here — just answer your phone.\n\n` +
+    `_This issue will close automatically once approved. If missed, the next method will be tried._`
   );
 
-  const code = await pollIssueForCode(issueNumber, LABEL);
+  const approved = await pollPageForApproval(page, LABEL);
 
-  if (code) {
-    await closeGitHubIssue(issueNumber, "✅ Code received. Submitting now...");
-    return { success: true, code };
+  if (approved) {
+    await closeGitHubIssue(issueNumber, "✅ Call approved! Continuing with login...");
+    return { success: true, code: null };
   }
 
-  await closeGitHubIssue(issueNumber, `⏰ No code received in ${WAIT_MINUTES} min. Trying next method...`);
+  await closeGitHubIssue(issueNumber, `⏰ Call not answered within ${WAIT_MINUTES * 60}s. Trying next method...`);
   return { success: false };
 }
 
