@@ -6,16 +6,15 @@ const USERNAME      = process.env.DARWINBOX_USERNAME;
 const PASSWORD      = process.env.DARWINBOX_PASSWORD;
 const GITHUB_TOKEN  = process.env.GITHUB_TOKEN;
 const GITHUB_REPO   = process.env.GITHUB_REPOSITORY;
-const WAIT_MINUTES  = parseInt(process.env.WAIT_MINUTES || "2", 10);
-
-// ─── ATTENDANCE CONFIG (edit here, not in secrets) ───────────────────────────
+// ─── ATTENDANCE & TIMING CONFIG (edit here, not in secrets) ─────────────────
 // Punch-in:  random minute between 0-30 added to 09:00  => range 09:00-09:30
 // Punch-out: random minute between 0-30 added to 18:00  => range 18:00-18:30
 // Reason:    selected from Darwinbox dropdown by visible text
 const PUNCH_IN_BASE_HOUR  = 9;
 const PUNCH_OUT_BASE_HOUR = 18;
-const PUNCH_RANDOM_MAX    = 30; // max random minutes added to base hour
+const PUNCH_RANDOM_MAX    = 30;  // max random minutes added to base hour
 const REASON              = "Forgot To Punch";
+const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before falling back
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── MFA METHOD ORDER ─────────────────────────────────────────────────────────
@@ -36,7 +35,7 @@ const MFA_METHOD_ORDER = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TIMEOUT_MS       = WAIT_MINUTES * 60 * 1000;
-const POLL_INTERVAL_MS = 15000;
+const POLL_INTERVAL_MS = 10000; // poll every 10 seconds
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -100,7 +99,7 @@ async function closeGitHubIssue(issueNumber, comment) {
 // Poll issue comments for a numeric code. Returns code string or null on timeout.
 async function pollIssueForCode(issueNumber, label) {
   const deadline = Date.now() + TIMEOUT_MS;
-  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES} min for code reply...`);
+  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES * 60}s for code reply...`);
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     const comments = await getIssueComments(issueNumber);
@@ -108,9 +107,10 @@ async function pollIssueForCode(issueNumber, label) {
       const code = comments[comments.length - 1].body.trim().replace(/\D/g, "");
       if (code.length >= 4) { console.log(`✅ [${label}] Code received`); return code; }
     }
-    console.log(`⏳ [${label}] No code yet — ${Math.round((deadline - Date.now()) / 60000)} min left`);
+    const secsLeft = Math.round((deadline - Date.now()) / 1000);
+    console.log(`⏳ [${label}] No code yet — ${secsLeft}s remaining`);
   }
-  console.warn(`⚠️ [${label}] Timed out after ${WAIT_MINUTES} min`);
+  console.warn(`⚠️ [${label}] Timed out after ${WAIT_MINUTES * 60}s`);
   return null;
 }
 
@@ -118,15 +118,16 @@ async function pollIssueForCode(issueNumber, label) {
 // Returns true if approved, false on timeout.
 async function pollPageForApproval(page, label) {
   const deadline = Date.now() + TIMEOUT_MS;
-  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES} min for push approval...`);
+  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES * 60}s for push approval...`);
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     const offMicrosoft = !page.url().includes("login.microsoftonline");
     const mfaGone      = !(await page.$('text="Verify your identity"').catch(() => null));
     if (offMicrosoft || mfaGone) { console.log(`✅ [${label}] Push approved`); return true; }
-    console.log(`⏳ [${label}] Not approved yet — ${Math.round((deadline - Date.now()) / 60000)} min left`);
+    const secsLeft = Math.round((deadline - Date.now()) / 1000);
+    console.log(`⏳ [${label}] Not approved yet — ${secsLeft}s remaining`);
   }
-  console.warn(`⚠️ [${label}] Push not approved within ${WAIT_MINUTES} min`);
+  console.warn(`⚠️ [${label}] Push not approved within ${WAIT_MINUTES * 60}s`);
   return false;
 }
 
@@ -227,11 +228,30 @@ async function tryCall(page) {
   const LABEL = "CALL";
   console.log(`\n📞 [${LABEL}] Triggering voice call to registered phone number...`);
 
+  // Dump visible element text for selector debugging
+  const visibleText = await page.evaluate(() =>
+    [...document.querySelectorAll("div, li, a, td, span")]
+      .map(el => el.innerText?.trim())
+      .filter(t => t && t.length < 100)
+      .slice(0, 30)
+  ).catch(() => []);
+  console.log("🔍 Elements on screen:", visibleText.join(" | "));
+  await page.screenshot({ path: "before_call_click.png" });
+
+  // Screenshot shows two plain rows: row1=Text, row2=Call — target by text content and position
   await clickOption(page, [
     '[data-bind*="OneWayVoiceMobile"]',
-    'div[data-value="PhoneAppNotification"]:has-text("Call")',
-    'div:has-text("Call +")',
-    'li:has-text("Call +")',
+    '[data-value*="Voice"]',
+    '[data-value*="voice"]',
+    'div.row:nth-child(2)',          // Call is the 2nd row on the picker screen
+    'li:nth-child(2)',
+    ':nth-match(div.row, 2)',
+    'div:has(> span:has-text("Call +"))',
+    'div:has(> div:has-text("Call +"))',
+    'td:has-text("Call +")',
+    'a:has-text("Call +")',
+    // Broad fallback — find any element whose direct text includes "Call +"
+    'div >> text=/Call \+/',
   ], LABEL);
   await sleep(2000);
 
@@ -258,11 +278,18 @@ async function tryText(page) {
   const LABEL = "TEXT";
   console.log(`\n📱 [${LABEL}] Sending OTP via SMS...`);
 
+  // Screenshot shows two plain rows: row1=Text, row2=Call — target by text content and position
   await clickOption(page, [
     'div[data-value="OneWaySMS"]',
     '[data-bind*="OneWaySMS"]',
-    'div:has-text("Text +")',
-    'li:has-text("Text +")',
+    'div.row:nth-child(1)',          // Text is the 1st row on the picker screen
+    'li:nth-child(1)',
+    ':nth-match(div.row, 1)',
+    'div:has(> span:has-text("Text +"))',
+    'div:has(> div:has-text("Text +"))',
+    'td:has-text("Text +")',
+    'a:has-text("Text +")',
+    'div >> text=/Text \+/',
   ], LABEL);
   await sleep(2000);
 
