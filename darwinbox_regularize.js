@@ -27,10 +27,10 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-  "MFA_PUSH",
-  "MFA_CODE",
+//  "MFA_PUSH",
+//  "MFA_CODE",
   "CALL",
-  "TEXT",
+//  "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
