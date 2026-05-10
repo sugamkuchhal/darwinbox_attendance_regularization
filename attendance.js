@@ -146,26 +146,38 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   🔍 ⋮ td matched ${menuCount} element(s)`);
   if (menuCount === 0) throw new Error("row-level-context-menu td not found in row");
 
+  // Scroll the target row into view so the correct ⋮ is clicked, not the first visible one
+  await menuTd.scrollIntoViewIfNeeded();
+  await sleep(500);
   await menuTd.click({ timeout: 5000 });
-  console.log(`   ✅ ⋮ clicked via Playwright locator`);
+  console.log(`   ✅ ⋮ clicked`);
   await sleep(1000);
 
   // Click "Time Correction" from the dropdown
-  // Use the dropdown item — it appears in a popup/overlay after ⋮ is clicked
-  // Filter to visible elements only to avoid clicking hidden badge text
-  const tcLocator = page.locator('text="Time Correction"').filter({ hasNotText: "Request" });
-  const tcCount = await tcLocator.count();
-  console.log(`   🔍 Time Correction items: ${tcCount}`);
+  // After ⋮ is clicked, a context menu appears with exactly 2 items: "Time Correction" and "Attendance Register"
+  // We wait for it to be visible then click it
+  await page.waitForFunction(() => {
+    const items = [...document.querySelectorAll("li, [role='menuitem'], [class*='context'] div, [class*='dropdown'] div")];
+    return items.some(el => (el.innerText || "").trim() === "Time Correction" && el.offsetParent !== null);
+  }, { timeout: 3000 }).catch(() => {});
 
-  if (tcCount > 0) {
-    await tcLocator.first().click({ timeout: 5000 });
-  } else {
-    // Fallback: click the last visible "Time Correction" text
-    const allTc = page.locator('text="Time Correction"');
-    const total = await allTc.count();
-    if (total === 0) throw new Error("Time Correction option not found in dropdown");
-    await allTc.nth(total - 1).click({ timeout: 5000 });
+  // Click the visible "Time Correction" — filter by visible only
+  const allTc = page.locator('text="Time Correction"');
+  const total = await allTc.count();
+  console.log(`   🔍 "Time Correction" in DOM: ${total}`);
+  if (total === 0) throw new Error("Time Correction not found");
+
+  // Find which one is visible (the dropdown item)
+  for (let i = 0; i < total; i++) {
+    const isVisible = await allTc.nth(i).isVisible();
+    if (isVisible) {
+      const box = await allTc.nth(i).boundingBox();
+      // The dropdown item will be near the clicked ⋮ — not in the table body
+      console.log(`   🔍 Visible TC item ${i}: box=${JSON.stringify(box)}`);
+    }
   }
+  // Click the last visible one — dropdown appends after existing badge elements
+  await allTc.nth(total - 1).click({ timeout: 5000, force: false });
   await sleep(2000);
   console.log(`   ✅ Time Correction panel opened`);
 }
@@ -177,8 +189,9 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   const [outHour, outMin] = punchOutTime.split(":");
 
   // Wait for modal
-  await page.waitForSelector("dbx-ds-modal", { timeout: 5000 });
-  const modal = page.locator("dbx-ds-modal");
+  // Wait for a VISIBLE modal — there may be multiple dbx-ds-modal in DOM
+  await page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).waitFor({ state: "visible", timeout: 5000 });
+  const modal = page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).first();
 
   // Fill time spinners scoped to modal
   // Order: ClockIn-Hour[0], ClockIn-Min[1], ClockOut-Hour[2], ClockOut-Min[3], Break[4,5]
@@ -212,7 +225,7 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   await page.screenshot({ path: `submitted_${date}.png` });
 
   // Wait for modal to close
-  await page.waitForSelector("dbx-ds-modal", { state: "hidden", timeout: 5000 }).catch(() => {});
+  await page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).first().waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
   await sleep(1000);
 }
 
