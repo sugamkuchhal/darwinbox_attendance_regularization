@@ -45,23 +45,56 @@ async function run() {
   const page = await context.newPage();
 
   try {
-    // ── Step 1: Login ──────────────────────────────────────────────────────
-    console.log("🔐 Logging in...");
+    // ── Step 1: Login via Microsoft SSO ───────────────────────────────────
+    console.log("🔐 Navigating to Darwinbox (Microsoft SSO)...");
     await page.goto(`${DARWINBOX_URL}/user/login`, { waitUntil: "networkidle" });
-    await sleep(1500);
+    await sleep(2000);
 
-    // Fill username
-    await page.fill('input[name="username"], input[type="email"], #username', USERNAME);
+    // If there's a "Login with Microsoft" / SSO button, click it first
+    const ssoSelectors = [
+      'a:has-text("Microsoft")',
+      'button:has-text("Microsoft")',
+      'a:has-text("SSO")',
+      'a:has-text("Sign in with")',
+      '.sso-btn',
+    ];
+    for (const sel of ssoSelectors) {
+      try {
+        await page.click(sel, { timeout: 3000 });
+        console.log(`✅ Clicked SSO button: ${sel}`);
+        await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 });
+        break;
+      } catch (_) {}
+    }
+    await sleep(2000);
+
+    // Microsoft login — Step 1: Enter email
+    console.log("📧 Entering email on Microsoft login...");
+    await page.fill('input[type="email"], input[name="loginfmt"]', USERNAME);
     await sleep(500);
+    await page.click('input[type="submit"], button[type="submit"]');
+    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 }).catch(() => {});
+    await sleep(2000);
 
-    // Fill password
-    await page.fill('input[name="password"], input[type="password"], #password', PASSWORD);
+    // Microsoft login — Step 2: Enter password
+    console.log("🔑 Entering password...");
+    await page.fill('input[type="password"], input[name="passwd"]', PASSWORD);
     await sleep(500);
+    await page.click('input[type="submit"], button[type="submit"]');
+    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+    await sleep(2000);
 
-    // Click login button
-    await page.click('button[type="submit"], input[type="submit"], .login-btn, #login-btn');
-    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 });
-    console.log("✅ Logged in successfully");
+    // Microsoft login — Step 3: "Stay signed in?" prompt → click Yes
+    try {
+      await page.click('input[type="submit"][value="Yes"], button:has-text("Yes")', { timeout: 5000 });
+      console.log("✅ Clicked 'Stay signed in'");
+      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+    } catch (_) {
+      console.log("ℹ️  No 'Stay signed in' prompt — continuing");
+    }
+
+    console.log("✅ Logged in via Microsoft SSO — current URL:", page.url());
 
     // ── Step 2: Navigate to Attendance ────────────────────────────────────
     console.log("📅 Navigating to attendance section...");
