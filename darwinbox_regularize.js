@@ -27,10 +27,10 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-//  "MFA_PUSH",
-//  "MFA_CODE",
+  "MFA_PUSH",
+  "MFA_CODE",
   "CALL",
-//  "TEXT",
+  "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -114,20 +114,27 @@ async function pollIssueForCode(issueNumber, label) {
   return null;
 }
 
-// Poll the page for navigation away from Microsoft login (used by MFA_PUSH).
-// Returns true if approved, false on timeout.
+// Poll the page until it reaches Darwinbox (fully off Microsoft).
+// "Verify your identity" → "We're calling your phone" is still Microsoft — not approved yet.
+// Returns true only when the URL contains DARWINBOX_URL domain, false on timeout.
 async function pollPageForApproval(page, label) {
-  const deadline = Date.now() + TIMEOUT_MS;
-  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES * 60}s for push approval...`);
+  const deadline     = Date.now() + TIMEOUT_MS;
+  const darwinboxHost = new URL(DARWINBOX_URL).hostname;
+  console.log(`⏳ [${label}] Waiting up to ${WAIT_MINUTES * 60}s for approval (watching for ${darwinboxHost})...`);
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    const offMicrosoft = !page.url().includes("login.microsoftonline");
-    const mfaGone      = !(await page.$('text="Verify your identity"').catch(() => null));
-    if (offMicrosoft || mfaGone) { console.log(`✅ [${label}] Push approved`); return true; }
-    const secsLeft = Math.round((deadline - Date.now()) / 1000);
-    console.log(`⏳ [${label}] Not approved yet — ${secsLeft}s remaining`);
+    const currentUrl   = page.url();
+    const onDarwinbox  = currentUrl.includes(darwinboxHost);
+    const secsLeft     = Math.round((deadline - Date.now()) / 1000);
+    console.log(`⏳ [${label}] Current URL: ${currentUrl} — ${secsLeft}s remaining`);
+    if (onDarwinbox) {
+      console.log(`✅ [${label}] Reached Darwinbox — approved!`);
+      await page.screenshot({ path: `approved_${label}.png` });
+      return true;
+    }
   }
-  console.warn(`⚠️ [${label}] Push not approved within ${WAIT_MINUTES * 60}s`);
+  console.warn(`⚠️ [${label}] Did not reach Darwinbox within ${WAIT_MINUTES * 60}s`);
+  await page.screenshot({ path: `timeout_${label}.png` });
   return false;
 }
 
@@ -408,7 +415,12 @@ async function run() {
       await sleep(2000);
     } catch (_) {}
 
-    console.log("✅ Logged in — URL:", page.url());
+    const postLoginUrl = page.url();
+    console.log("✅ Post-login URL:", postLoginUrl);
+    if (!postLoginUrl.includes(new URL(DARWINBOX_URL).hostname)) {
+      console.warn("⚠️ Still not on Darwinbox after MFA — may need to handle an intermediate Microsoft page");
+      await page.screenshot({ path: "post_login_check.png" });
+    }
 
     // ── Step 6: Navigate to regularization ───────────────────────────────
     console.log("📅 Navigating to attendance regularization...");
