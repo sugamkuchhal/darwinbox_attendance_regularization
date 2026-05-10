@@ -76,39 +76,27 @@ async function findAbsentDates(page) {
       if (toNum(dateStr) >= todayNum){ skipped.push({ date: dateStr, reason: "today or future — skip" }); continue; }
       seen.add(dateStr);
 
-      // Attendance status: read span text directly, excluding hover panel content
-      const statusSpans = [...row.querySelectorAll("span")].filter(
-        s => !s.closest('[slot="hover"]')
-      );
-      let attendanceStatus = "";
-      for (const span of statusSpans) {
-        const t = (span.innerText || "").trim();
-        if (["Absent", "Present", "Weekly Off", "Holiday"].includes(t)) {
-          attendanceStatus = t;
-          break;
-        }
-      }
+      // Attendance status: confirmed from HTML — td.primary-cell.sorting_1 contains
+      // <span id="dbx-overflow-span"> with text "Absent", "Present", "Weekly Off" etc.
+      const attendanceTd = row.querySelector('td.primary-cell.sorting_1');
+      const attendanceSpan = attendanceTd
+        ? attendanceTd.querySelector('span#dbx-overflow-span')
+        : null;
+      const attendanceStatus = attendanceSpan
+        ? (attendanceSpan.innerText || "").trim()
+        : "";
 
-      // Request status: check ONLY tds after the ⋮ column (row-level-context-menu)
-      // From confirmed td classes: bulk-select | date | attendance | ⋮(row-level-context-menu) | badge tds...
-      // We skip the first 4 tds and check the rest for badge text
-      let requestStatus = "";
-      const menuTdIndex = tds.findIndex(td => td.className.includes("row-level-context-menu"));
-      const badgeTds = menuTdIndex >= 0 ? tds.slice(menuTdIndex + 1) : tds.slice(4);
-      for (const td of badgeTds) {
-        const t = (td.innerText || "").trim();
-        if (t.includes("Request Pending") || t.includes("Time Correction")) {
-          requestStatus = t.slice(0, 60);
-          break;
-        }
-      }
+      // Request status: confirmed from HTML — when a request exists, the row contains
+      // <dbx-ds-status-tag> inside a td.dt-left (without primary-cell).
+      // The text is in Shadow DOM so we detect presence of the element, not its text.
+      const hasRequestBadge = !!row.querySelector('dbx-ds-status-tag');
 
       if (attendanceStatus !== "Absent") {
         skipped.push({ date: dateStr, reason: `not absent: ${attendanceStatus || "no status found"}` });
         continue;
       }
-      if (requestStatus) {
-        skipped.push({ date: dateStr, reason: `request exists: ${requestStatus}` });
+      if (hasRequestBadge) {
+        skipped.push({ date: dateStr, reason: "request badge exists (dbx-ds-status-tag present)" });
         continue;
       }
 
