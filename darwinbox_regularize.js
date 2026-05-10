@@ -6,6 +6,7 @@ const USERNAME      = process.env.DARWINBOX_USERNAME;
 const PASSWORD      = process.env.DARWINBOX_PASSWORD;
 const GITHUB_TOKEN  = process.env.GITHUB_TOKEN;
 const GITHUB_REPO   = process.env.GITHUB_REPOSITORY;
+const EMPLOYEE_ID   = process.env.DARWINBOX_EMPLOYEE_ID;
 // ─── ATTENDANCE & TIMING CONFIG (edit here, not in secrets) ─────────────────
 // Punch-in:  random minute between 0-30 added to 09:00  => range 09:00-09:30
 // Punch-out: random minute between 0-30 added to 18:00  => range 18:00-18:30
@@ -14,7 +15,7 @@ const PUNCH_IN_BASE_HOUR  = 9;
 const PUNCH_OUT_BASE_HOUR = 18;
 const PUNCH_RANDOM_MAX    = 30;  // max random minutes added to base hour
 const REASON              = "Forgot To Punch";
-const WAIT_MINUTES        = 1;   // minutes to wait per MFA method before falling back
+const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before falling back
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── MFA METHOD ORDER ─────────────────────────────────────────────────────────
@@ -27,8 +28,8 @@ const WAIT_MINUTES        = 1;   // minutes to wait per MFA method before fallin
 //   "TEXT"      → SMS to your phone
 //
 const MFA_METHOD_ORDER = [
-//  "MFA_PUSH",
-//  "MFA_CODE",
+  "MFA_PUSH",
+  "MFA_CODE",
   "CALL",
   "TEXT",
 ];
@@ -422,58 +423,168 @@ async function run() {
       await page.screenshot({ path: "post_login_check.png" });
     }
 
-    // ── Step 6: Navigate to regularization ───────────────────────────────
-    console.log("📅 Navigating to attendance regularization...");
-    await page.goto(`${DARWINBOX_URL}/attendance/regularization`, { waitUntil: "networkidle" });
-    await sleep(2000);
-    if (page.url().includes("login")) {
-      await page.goto(`${DARWINBOX_URL}/attendance/index`, { waitUntil: "networkidle" });
-      await sleep(2000);
-    }
+    // ── Step 6: Navigate to attendance list ─────────────────────────────
+    const ATTENDANCE_URL = `${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`;
+    console.log(`📅 Navigating to attendance page: ${ATTENDANCE_URL}`);
+    await page.goto(ATTENDANCE_URL, { waitUntil: "networkidle" });
+    await sleep(3000);
 
-    // ── Step 7: Click Apply ───────────────────────────────────────────────
-    for (const sel of ['button:has-text("Apply")', 'a:has-text("Apply")', 'button:has-text("Add")', '.apply-regularization', '#applyRegularization']) {
-      try { await page.click(sel, { timeout: 3000 }); console.log(`✅ Clicked: ${sel}`); break; } catch (_) {}
-    }
-    await sleep(1500);
-
-    // ── Step 8: Fill form ─────────────────────────────────────────────────
-    const targetDate  = getYesterdayDate();
-    const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
-    const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
-    console.log(`📝 Date: ${targetDate} | Punch-in: ${punchInTime} | Punch-out: ${punchOutTime}`);
-
-    // Date
-    try { await page.fill('input[name*="date"], input[placeholder*="ate"]', targetDate, { timeout: 3000 }); } catch (_) { console.warn("⚠️ date"); }
-
-    // Punch-in time
-    try { await page.fill('input[name*="in_time"], input[placeholder*="In Time"]', punchInTime, { timeout: 3000 }); } catch (_) { console.warn("⚠️ punch-in"); }
-
-    // Punch-out time
-    try { await page.fill('input[name*="out_time"], input[placeholder*="Out Time"]', punchOutTime, { timeout: 3000 }); } catch (_) { console.warn("⚠️ punch-out"); }
-
-    // Reason — select from dropdown by visible text
+    // ── Step 7: Switch to list view ───────────────────────────────────────
+    console.log("📋 Switching to list view...");
     try {
-      await page.selectOption('select[name*="reason"], select[name*="remark"]', { label: REASON }, { timeout: 3000 });
-      console.log(`✅ Reason selected: "${REASON}"`);
+      // List view toggle is the second icon in the view switcher group
+      await page.click('button[aria-label*="list"], button[title*="list"], button[title*="List"]', { timeout: 3000 });
     } catch (_) {
-      // Fallback: click dropdown and pick matching option
       try {
-        await page.click('[placeholder*="reason"], [placeholder*="Reason"], .reason-dropdown', { timeout: 2000 });
-        await page.click(`li:has-text("${REASON}"), option:has-text("${REASON}")`, { timeout: 2000 });
-        console.log(`✅ Reason picked via click: "${REASON}"`);
-      } catch (__) { console.warn("⚠️ reason dropdown — check selector"); }
+        // Fallback: click the second toggle button (list icon after calendar icon)
+        const toggleBtns = await page.$$('button svg, .view-toggle button, [class*="toggle"] button');
+        if (toggleBtns.length >= 2) await toggleBtns[1].click();
+      } catch (__) {}
     }
-    await sleep(1000);
-
-    // ── Step 9: Submit ────────────────────────────────────────────────────
-    for (const sel of ['button[type="submit"]:has-text("Submit")', 'button:has-text("Submit")', 'button:has-text("Save")', 'input[type="submit"]']) {
-      try { await page.click(sel, { timeout: 3000 }); console.log("✅ Submitted!"); break; } catch (_) {}
-    }
-
     await sleep(2000);
+    await page.screenshot({ path: "list_view.png" });
+
+    // ── Step 8: Find all absent rows with no pending request ──────────────
+    console.log("🔍 Scanning for absent days with no pending request...");
+
+    // Collect all rows from the attendance table
+    const absentDates = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("tr, [class*='row']:not([class*='header'])")];
+      const results = [];
+      for (const row of rows) {
+        const text = row.innerText || "";
+        // Must contain "Absent" 
+        if (!text.includes("Absent")) continue;
+        // Must NOT have a pending request (no "Request Pending" or "Time Correction" badge)
+        if (text.includes("Request Pending") || text.includes("Time Correction")) continue;
+        // Extract the date — format DD-MM-YYYY
+        const dateMatch = text.match(/\d{2}-\d{2}-\d{4}/);
+        if (dateMatch) results.push(dateMatch[0]);
+      }
+      return results;
+    });
+
+    if (absentDates.length === 0) {
+      console.log("✅ No absent days found needing regularization — nothing to do!");
+      await page.screenshot({ path: "regularization_result.png" });
+      return;
+    }
+
+    console.log(`📋 Found ${absentDates.length} absent day(s) to regularize: ${absentDates.join(", ")}`);
+
+    // ── Step 9: Regularize each absent day ────────────────────────────────
+    for (const date of absentDates) {
+      console.log(`
+📝 Processing: ${date}`);
+
+      // Generate random punch times for this day
+      const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
+      const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
+      console.log(`   Punch-in: ${punchInTime} | Punch-out: ${punchOutTime}`);
+
+      // Find the row for this date and click its ⋮ menu
+      try {
+        // Click the three-dot menu on the row matching this date
+        const rowHandle = await page.evaluateHandle((targetDate) => {
+          const rows = [...document.querySelectorAll("tr, [class*='row']")];
+          return rows.find(r => (r.innerText || "").includes(targetDate)) || null;
+        }, date);
+
+        if (!rowHandle || !(await rowHandle.asElement())) {
+          console.warn(`   ⚠️ Could not find row for ${date} — skipping`);
+          continue;
+        }
+
+        // Click the ⋮ button within that row
+        const menuBtn = await rowHandle.$('button, [class*="menu"], [class*="dots"], [aria-label*="more"], [aria-label*="action"]');
+        if (menuBtn) {
+          await menuBtn.click();
+        } else {
+          // Fallback: find by text position
+          await page.click(`text="${date}" >> .. >> button`, { timeout: 3000 }).catch(() => {});
+        }
+        await sleep(1000);
+
+        // Click "Time Correction" from the dropdown menu
+        await page.click('text="Time Correction"', { timeout: 3000 });
+        await sleep(2000);
+        console.log(`   ✅ Time Correction panel opened`);
+
+      } catch (err) {
+        console.warn(`   ⚠️ Could not open Time Correction for ${date}: ${err.message}`);
+        await page.screenshot({ path: `error_${date}.png` });
+        continue;
+      }
+
+      // ── Fill the Time Correction form ──────────────────────────────────
+      try {
+        // Clock In Time — hour and minute spinners
+        // Clear and set hour spinner for punch-in
+        const [inHour, inMin] = punchInTime.split(":");
+        const [outHour, outMin] = punchOutTime.split(":");
+
+        // Spinners are input[type="number"] or custom spinners — try both
+        const spinners = await page.$$('input[type="number"], [class*="spinner"] input, [class*="time"] input');
+        console.log(`   🔢 Found ${spinners.length} spinner inputs`);
+
+        if (spinners.length >= 4) {
+          // Expected order: ClockIn-Hour, ClockIn-Min, ClockOut-Hour, ClockOut-Min
+          await spinners[0].click({ clickCount: 3 });
+          await spinners[0].fill(inHour);
+          await sleep(300);
+          await spinners[1].click({ clickCount: 3 });
+          await spinners[1].fill(inMin);
+          await sleep(300);
+          await spinners[2].click({ clickCount: 3 });
+          await spinners[2].fill(outHour);
+          await sleep(300);
+          await spinners[3].click({ clickCount: 3 });
+          await spinners[3].fill(outMin);
+          await sleep(300);
+        } else {
+          // Try direct triple-click + type approach with labels
+          await fillSpinnerByLabel(page, "Clock In Time", inHour, inMin);
+          await fillSpinnerByLabel(page, "Clock Out Time", outHour, outMin);
+        }
+
+        // Location — should already be "Office", verify
+        const locationVal = await page.$eval(
+          '[class*="location"] [class*="select__single-value"], [class*="Location"] [class*="value"]',
+          el => el.innerText
+        ).catch(() => "");
+        console.log(`   📍 Location: ${locationVal || "pre-filled"}`);
+
+        // Reason dropdown — custom react-select style
+        await page.click('text="Select Reason"', { timeout: 3000 });
+        await sleep(500);
+        await page.click(`text="${REASON}"`, { timeout: 3000 });
+        console.log(`   ✅ Reason: "${REASON}"`);
+        await sleep(500);
+
+        // Screenshot before submit
+        await page.screenshot({ path: `before_submit_${date}.png` });
+
+        // Submit
+        await page.click('button:has-text("Submit")', { timeout: 5000 });
+        await sleep(2000);
+        console.log(`   ✅ Submitted for ${date}`);
+        await page.screenshot({ path: `submitted_${date}.png` });
+
+        // Wait for panel to close before next row
+        await sleep(2000);
+
+      } catch (err) {
+        console.warn(`   ⚠️ Error filling form for ${date}: ${err.message}`);
+        await page.screenshot({ path: `form_error_${date}.png` });
+        // Try to close the panel and continue with next date
+        try { await page.click('button:has-text("Cancel"), button[aria-label*="close"], .close-btn', { timeout: 2000 }); } catch (_) {}
+        await sleep(1000);
+      }
+    }
+
+    console.log(`
+✅ All done — processed ${absentDates.length} day(s)`);
     await page.screenshot({ path: "regularization_result.png" });
-    console.log("📸 Done — screenshot saved");
 
   } catch (err) {
     console.error("❌ Error:", err.message);
@@ -482,6 +593,23 @@ async function run() {
   } finally {
     await browser.close();
   }
+}
+
+// Helper: fill hour+minute into a labeled spinner pair
+async function fillSpinnerByLabel(page, label, hour, minute) {
+  try {
+    const labelEl = await page.$(`text="${label}"`);
+    if (!labelEl) return;
+    // Get the parent container and find inputs within it
+    const container = await labelEl.evaluateHandle(el => el.closest('[class*="field"], [class*="group"], [class*="time"]') || el.parentElement);
+    const inputs = await container.$$('input');
+    if (inputs.length >= 2) {
+      await inputs[0].click({ clickCount: 3 });
+      await inputs[0].type(hour);
+      await inputs[1].click({ clickCount: 3 });
+      await inputs[1].type(minute);
+    }
+  } catch (_) {}
 }
 
 run();
