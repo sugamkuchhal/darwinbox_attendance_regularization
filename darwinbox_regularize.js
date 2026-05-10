@@ -30,8 +30,8 @@ const WAIT_MINUTES        = 2;   // minutes to wait per MFA method before fallin
 const MFA_METHOD_ORDER = [
 //  "MFA_PUSH",
 //  "MFA_CODE",
-  "CALL",
-//  "TEXT",
+//  "CALL",
+  "TEXT",
 ];
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -431,16 +431,58 @@ async function run() {
 
     // ── Step 7: Switch to list view ───────────────────────────────────────
     console.log("📋 Switching to list view...");
-    try {
-      // List view toggle is the second icon in the view switcher group
-      await page.click('button[aria-label*="list"], button[title*="list"], button[title*="List"]', { timeout: 3000 });
-    } catch (_) {
+
+    // Scroll to top first so the view toggle buttons are visible
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(1000);
+
+    // The list view is the second icon in the top-right toggle group (after calendar icon)
+    // From the screenshot: two icons side by side near top-right of the attendance section
+    let listViewClicked = false;
+    const listSelectors = [
+      'button[aria-label*="list"]',
+      'button[title*="list"]',
+      'button[title*="List"]',
+      'button[aria-label*="List"]',
+      // The list icon SVG button — try clicking each button in the icon group
+    ];
+    for (const sel of listSelectors) {
       try {
-        // Fallback: click the second toggle button (list icon after calendar icon)
-        const toggleBtns = await page.$$('button svg, .view-toggle button, [class*="toggle"] button');
-        if (toggleBtns.length >= 2) await toggleBtns[1].click();
+        await page.click(sel, { timeout: 2000 });
+        console.log(`✅ List view toggled via: ${sel}`);
+        listViewClicked = true;
+        break;
+      } catch (_) {}
+    }
+
+    if (!listViewClicked) {
+      // Fallback: find all small icon-only buttons near top-right and click the second one
+      // (first = calendar, second = list)
+      try {
+        const allBtns = await page.$$('button');
+        // Filter to buttons that are small (icon-only, no text)
+        for (const btn of allBtns) {
+          const txt = await btn.evaluate(el => el.innerText.trim());
+          const box = await btn.boundingBox();
+          if (txt === "" && box && box.width < 60 && box.height < 60) {
+            // Click each small button and check if the view changes to list
+            await btn.click();
+            await sleep(800);
+            const hasTable = await page.$("table, [class*='list'] tr, [class*='attendance-list']").catch(() => null);
+            if (hasTable) {
+              console.log("✅ List view activated via icon button fallback");
+              listViewClicked = true;
+              break;
+            }
+          }
+        }
       } catch (__) {}
     }
+
+    if (!listViewClicked) {
+      console.warn("⚠️ Could not toggle list view — proceeding anyway, will scan what's visible");
+    }
+
     await sleep(2000);
     await page.screenshot({ path: "list_view.png" });
 
@@ -470,7 +512,10 @@ async function run() {
       return;
     }
 
-    console.log(`📋 Found ${absentDates.length} absent day(s) to regularize: ${absentDates.join(", ")}`);
+    console.log("─".repeat(50));
+    console.log(`📋 Found ${absentDates.length} absent day(s) to regularize:`);
+    absentDates.forEach((d, i) => console.log(`   ${i + 1}. ${d}`));
+    console.log("─".repeat(50));
 
     // ── Step 9: Regularize each absent day ────────────────────────────────
     for (const date of absentDates) {
