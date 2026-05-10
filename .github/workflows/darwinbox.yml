@@ -2,16 +2,20 @@ name: Darwinbox Attendance Regularization
 
 on:
   schedule:
-    # Runs every day at 9:30 PM IST (4:00 PM UTC)
-    # Adjust cron time as needed: https://crontab.guru
-    - cron: "0 16 * * 1-5"   # Mon–Fri only
+    # Runs every weekday at 9:30 PM IST (4:00 PM UTC)
+    - cron: "0 16 * * 1-5"
 
-  workflow_dispatch:           # Also allows manual trigger from GitHub UI
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+# ── Permissions needed to create/close GitHub Issues for OTP flow ──
+permissions:
+  issues: write
+  contents: read
 
 jobs:
   regularize:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25  # Extra time to accommodate 15-min OTP wait
 
     steps:
       - name: ⬇️ Checkout repository
@@ -36,12 +40,14 @@ jobs:
           PUNCH_IN_TIME:      ${{ secrets.PUNCH_IN_TIME }}
           PUNCH_OUT_TIME:     ${{ secrets.PUNCH_OUT_TIME }}
           REGULARIZE_REASON:  ${{ secrets.REGULARIZE_REASON }}
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}       # auto-provided, no setup needed
+          GITHUB_REPOSITORY:  ${{ github.repository }}          # auto-provided, no setup needed
         run: node darwinbox_regularize.js
 
-      - name: 📸 Upload screenshot (for debugging)
+      - name: 📸 Upload screenshots (for debugging)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: regularization-screenshot
+          name: screenshots
           path: "*.png"
           retention-days: 7
