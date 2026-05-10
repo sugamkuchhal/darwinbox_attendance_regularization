@@ -1,0 +1,47 @@
+name: Darwinbox Attendance Regularization
+
+on:
+  schedule:
+    # Runs every day at 9:30 PM IST (4:00 PM UTC)
+    # Adjust cron time as needed: https://crontab.guru
+    - cron: "0 16 * * 1-5"   # Mon–Fri only
+
+  workflow_dispatch:           # Also allows manual trigger from GitHub UI
+
+jobs:
+  regularize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: 🎭 Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: 🤖 Run attendance regularization
+        env:
+          DARWINBOX_URL:      ${{ secrets.DARWINBOX_URL }}
+          DARWINBOX_USERNAME: ${{ secrets.DARWINBOX_USERNAME }}
+          DARWINBOX_PASSWORD: ${{ secrets.DARWINBOX_PASSWORD }}
+          PUNCH_IN_TIME:      ${{ secrets.PUNCH_IN_TIME }}
+          PUNCH_OUT_TIME:     ${{ secrets.PUNCH_OUT_TIME }}
+          REGULARIZE_REASON:  ${{ secrets.REGULARIZE_REASON }}
+        run: node darwinbox_regularize.js
+
+      - name: 📸 Upload screenshot (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regularization-screenshot
+          path: "*.png"
+          retention-days: 7
