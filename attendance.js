@@ -154,35 +154,40 @@ async function openTimeCorrectionPanel(page, date) {
   await sleep(1000);
 
   // The dropdown has exactly 2 items: "Time Correction" and "Attendance Register"
-  // It's a simple popup — find it by looking for the element containing both items
-  // then click the "Time Correction" item within it
-  await sleep(500); // let dropdown render
+  // Key insight: the dropdown container will contain BOTH items as siblings
+  // Find the element whose parent also contains "Attendance Register"
+  await sleep(500);
 
-  // Strategy: find visible element with EXACTLY the text "Time Correction"
-  // that is NOT inside the table (i.e., not a badge) — it will have no sibling badge text
   const clicked = await page.evaluate(() => {
-    // Find all elements whose direct trimmed text is exactly "Time Correction"
     const all = [...document.querySelectorAll("*")];
     for (const el of all) {
-      // Must be visible
       if (!el.offsetParent) continue;
-      // Direct text content must be exactly "Time Correction"
-      const directText = [...el.childNodes]
-        .filter(n => n.nodeType === 3)
-        .map(n => n.textContent.trim())
-        .join("");
-      if (directText !== "Time Correction") continue;
-      // Must NOT be inside the table (badge elements are in table)
-      if (el.closest("table")) continue;
-      // Click it
-      el.click();
-      return true;
+      const text = (el.innerText || "").trim();
+      if (text !== "Time Correction") continue;
+      // Check if a sibling or nearby element contains "Attendance Register"
+      // which confirms this is the dropdown, not a badge
+      const parent = el.parentElement;
+      if (!parent) continue;
+      const parentText = (parent.innerText || "").trim();
+      if (parentText.includes("Attendance Register")) {
+        el.click();
+        return { found: true, parentTag: parent.tagName, parentClass: parent.className.slice(0, 80) };
+      }
+      // Also check grandparent
+      const grandparent = parent.parentElement;
+      if (grandparent) {
+        const gpText = (grandparent.innerText || "").trim();
+        if (gpText.includes("Attendance Register")) {
+          el.click();
+          return { found: true, parentTag: grandparent.tagName, parentClass: grandparent.className.slice(0, 80) };
+        }
+      }
     }
-    return false;
+    return { found: false };
   });
 
-  console.log(`   🔍 Dropdown "Time Correction" click: ${clicked}`);
-  if (!clicked) throw new Error("Could not find Time Correction dropdown item outside table");
+  console.log(`   🔍 Dropdown click result: ${JSON.stringify(clicked)}`);
+  if (!clicked.found) throw new Error("Could not find Time Correction in dropdown (sibling check failed)");
   await sleep(2000);
   console.log(`   ✅ Time Correction panel opened`);
 }
