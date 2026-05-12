@@ -152,22 +152,33 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   🔍 row_context_menu btn index for ${date}: ${btnIndex}`);
   if (btnIndex === -1) throw new Error(`Could not find row_context_menu button for ${date}`);
 
-  // Step 2: scroll into view, focus the ⋮ button and open with Enter
+  // Step 2: click the ⋮ button to open dropdown
   const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
   await contextBtn.scrollIntoViewIfNeeded();
   await sleep(300);
-  await contextBtn.focus();
-  await sleep(200);
-  await page.keyboard.press("Enter");
-  console.log(`   ✅ ⋮ opened via Enter (btn index ${btnIndex})`);
-  await sleep(800);
+  await contextBtn.click({ timeout: 5000 });
+  console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
 
-  // Step 3: Tab once to focus "Time Correction" (first item), Enter to select
-  await page.keyboard.press("Tab");
-  await sleep(200);
-  await page.keyboard.press("Enter");
+  // Step 3: poll until dbx-ds-menu-item appears inside the button (injected after dropdown opens)
+  // From DevTools: btn.querySelectorAll("dbx-ds-menu-item")[0].textContent === "Time Correction"
+  let clicked = false;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await sleep(500);
+    const result = await page.evaluate((idx) => {
+      const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
+      if (!btn) return { ok: false, reason: "btn not found" };
+      const items = btn.querySelectorAll("dbx-ds-menu-item");
+      if (items.length === 0) return { ok: false, reason: `empty after poll (innerHTML len: ${btn.innerHTML.length})` };
+      const text = items[0].textContent.trim();
+      items[0].click();
+      return { ok: true, text };
+    }, btnIndex);
+    console.log(`   🔍 Poll ${attempt + 1}: ${JSON.stringify(result)}`);
+    if (result.ok) { clicked = true; break; }
+  }
+  if (!clicked) throw new Error("Time Correction menu item never appeared after 10 polls");
   await sleep(2000);
-  console.log(`   ✅ Time Correction selected via keyboard`);
+  console.log(`   ✅ Time Correction clicked`);
 }
 
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
