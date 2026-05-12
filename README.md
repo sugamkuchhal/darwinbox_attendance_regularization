@@ -7,7 +7,13 @@ Runs daily in the cloud (GitHub Actions) — no machine needed.
 ## 📁 Files
 
 ```
-├── darwinbox_regularize.js          ← Main automation script
+├── index.js                         ← Main entrypoint
+├── attendance.js                    ← Attendance scanning + regularization flow
+├── browser.js                       ← Browser launch + login flow
+├── mfa.js                           ← MFA method orchestration
+├── github.js                        ← GitHub issue/comment helpers for OTP collection
+├── config.js                        ← Environment + timeout configuration
+├── utils.js                         ← Shared helper utilities
 ├── package.json                     ← Node.js dependencies
 └── .github/
     └── workflows/
@@ -22,7 +28,7 @@ Runs daily in the cloud (GitHub Actions) — no machine needed.
 1. Go to [github.com](https://github.com) → **New repository**
 2. Name it e.g. `darwinbox-automation`
 3. Set it to **Private** (important — keeps your credentials safe)
-4. Upload all three files maintaining the folder structure above
+4. Upload all files maintaining the folder structure above
 
 ### Step 2: Add Your Secrets
 Go to your repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
@@ -34,9 +40,8 @@ Add these secrets one by one:
 | `DARWINBOX_URL`       | `https://yourcompany.darwinbox.in`         |
 | `DARWINBOX_USERNAME`  | Your login email or employee ID            |
 | `DARWINBOX_PASSWORD`  | Your Darwinbox password                    |
-| `PUNCH_IN_TIME`       | `09:00`                                    |
-| `PUNCH_OUT_TIME`      | `18:30`                                    |
-| `REGULARIZE_REASON`   | `Worked from office - system missed punch` |
+| `DARWINBOX_EMPLOYEE_ID` | Employee ID used in attendance URL       |
+| `GITHUB_TOKEN`        | Token with issue write permissions         |
 
 ### Step 3: Enable GitHub Actions
 1. Go to your repo → **Actions** tab
@@ -71,7 +76,7 @@ After each run, GitHub Actions saves a **screenshot** as an artifact:
 
 1. **Selectors may need tuning** — Darwinbox UI varies by company. If the script fails, check the error screenshot and update the CSS selectors in `darwinbox_regularize.js` to match your company's Darwinbox layout.
 
-2. **2FA / OTP** — If your Darwinbox login requires OTP, the script will fail at login. Let me know and I can add OTP handling.
+2. **2FA / OTP** — OTP is supported through GitHub issues (push/code/call/SMS fallback), but requires `GITHUB_TOKEN` and `GITHUB_REPOSITORY` to be present in the runtime environment.
 
 3. **Already regularized days** — The script tries to regularize yesterday's attendance. If already regularized, Darwinbox may show an error — that's fine, the script will still exit cleanly.
 
