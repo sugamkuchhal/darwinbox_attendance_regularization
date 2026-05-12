@@ -146,11 +146,8 @@ async function openTimeCorrectionPanel(page, date) {
   const tcY = btnBox.y + btnBox.height + 20;
   await page.mouse.click(tcX, tcY);
   console.log(`   ✅ Clicked Time Correction at (${Math.round(tcX)}, ${Math.round(tcY)})`);
-
-  // Wait for the Time Correction modal to appear
-  // Use the most reliable signal: Punch In Date input becoming visible
-  await page.waitForSelector('input[placeholder="DD-MM-YYYY"], input[value*="2026"]', { timeout: 5000 });
-  await sleep(500);
+  // Modal opens — wait for it to render (inputs are in Shadow DOM, not directly queryable)
+  await sleep(2000);
   console.log(`   ✅ Time Correction panel open`);
 }
 
@@ -192,6 +189,15 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   await sleep(3000);
   console.log(`   ✅ Submitted for ${date}`);
   await page.screenshot({ path: `submitted_${date}.png` });
+
+  // Close modal — click X or Cancel to ensure it's gone before next row
+  try {
+    await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 });
+  } catch (_) {}
+  try {
+    // Click the X close button (top right of modal)
+    await page.locator('dbx-ds-modal').last().locator('button').first().click({ timeout: 2000 });
+  } catch (_) {}
   await sleep(1000);
 }
 
