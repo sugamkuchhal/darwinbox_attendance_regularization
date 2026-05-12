@@ -129,67 +129,53 @@ async function openTimeCorrectionPanel(page, date) {
     }
   } catch (_) {}
 
-  // Find the ⋮ td using Playwright locator for a real pointer event
-  // ⋮ td confirmed class: "row-level-context-menu" (from logs)
-  // We use page.locator scoped to the row identified by its date span
-  const rowLocator = page.locator('table tr').filter({
-    has: page.locator(`td.primary-cell span[dir="auto"]:text-is("${date}")`)
-  });
+  // CONFIRMED DOM STRUCTURE (from DevTools):
+  // Each row has a DBX-DS-BUTTON.row_context_menu element containing the ⋮
+  // After clicking it, dbx-ds-menu-item[0] = "Time Correction", [1] = "Attendance Register"
+  // These are in the LIGHT DOM of the button — directly queryable
 
-  const rowCount = await rowLocator.count();
-  console.log(`   🔍 Row locator matched ${rowCount} row(s) for ${date}`);
-  if (rowCount === 0) throw new Error(`Row not found for date ${date}`);
-
-  // Click the ⋮ td with a real Playwright pointer event (not dispatchEvent)
-  const menuTd = rowLocator.locator('td.row-level-context-menu');
-  const menuCount = await menuTd.count();
-  console.log(`   🔍 ⋮ td matched ${menuCount} element(s)`);
-  if (menuCount === 0) throw new Error("row-level-context-menu td not found in row");
-
-  // Scroll the target row into view so the correct ⋮ is clicked, not the first visible one
-  await menuTd.scrollIntoViewIfNeeded();
-  await sleep(500);
-  await menuTd.click({ timeout: 5000 });
-  console.log(`   ✅ ⋮ clicked`);
-  await sleep(1000);
-
-  // The dropdown has exactly 2 items: "Time Correction" and "Attendance Register"
-  // Key insight: the dropdown container will contain BOTH items as siblings
-  // Find the element whose parent also contains "Attendance Register"
-  await sleep(500);
-
-  const clicked = await page.evaluate(() => {
-    const all = [...document.querySelectorAll("*")];
-    for (const el of all) {
-      if (!el.offsetParent) continue;
-      const text = (el.innerText || "").trim();
-      if (text !== "Time Correction") continue;
-      // Check if a sibling or nearby element contains "Attendance Register"
-      // which confirms this is the dropdown, not a badge
-      const parent = el.parentElement;
-      if (!parent) continue;
-      const parentText = (parent.innerText || "").trim();
-      if (parentText.includes("Attendance Register")) {
-        el.click();
-        return { found: true, parentTag: parent.tagName, parentClass: parent.className.slice(0, 80) };
-      }
-      // Also check grandparent
-      const grandparent = parent.parentElement;
-      if (grandparent) {
-        const gpText = (grandparent.innerText || "").trim();
-        if (gpText.includes("Attendance Register")) {
-          el.click();
-          return { found: true, parentTag: grandparent.tagName, parentClass: grandparent.className.slice(0, 80) };
-        }
-      }
+  // Step 1: find the index of DBX-DS-BUTTON.row_context_menu that belongs to the target row
+  const btnIndex = await page.evaluate((targetDate) => {
+    const rows = [...document.querySelectorAll("table tr")];
+    const targetRow = rows.find(r => {
+      const span = r.querySelector('td.primary-cell span[dir="auto"]');
+      return span && (span.innerText || "").trim() === targetDate;
+    });
+    if (!targetRow) return -1;
+    const allBtns = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")];
+    for (let i = 0; i < allBtns.length; i++) {
+      if (targetRow.contains(allBtns[i])) return i;
     }
-    return { found: false };
-  });
+    return -1;
+  }, date);
 
-  console.log(`   🔍 Dropdown click result: ${JSON.stringify(clicked)}`);
-  if (!clicked.found) throw new Error("Could not find Time Correction in dropdown (sibling check failed)");
+  console.log(`   🔍 row_context_menu btn index for ${date}: ${btnIndex}`);
+  if (btnIndex === -1) throw new Error(`Could not find row_context_menu button for ${date}`);
+
+  // Step 2: scroll into view and click the ⋮ button
+  const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
+  await contextBtn.scrollIntoViewIfNeeded();
+  await sleep(300);
+  await contextBtn.click({ timeout: 5000 });
+  console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
+  await sleep(800);
+
+  // Step 3: click dbx-ds-menu-item[0] = "Time Correction" — confirmed from DevTools
+  // textContent of item[0] === "Time Correction", item[1] === "Attendance Register"
+  const clicked = await page.evaluate((idx) => {
+    const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
+    if (!btn) return { ok: false, reason: "button not found at index" };
+    const items = btn.querySelectorAll("dbx-ds-menu-item");
+    if (items.length === 0) return { ok: false, reason: `no dbx-ds-menu-item found (btn innerHTML: ${btn.innerHTML.slice(0,200)})` };
+    const text = items[0].textContent.trim();
+    items[0].click();
+    return { ok: true, text };
+  }, btnIndex);
+
+  console.log(`   🔍 Menu item click: ${JSON.stringify(clicked)}`);
+  if (!clicked.ok) throw new Error(`Could not click Time Correction: ${clicked.reason}`);
   await sleep(2000);
-  console.log(`   ✅ Time Correction panel opened`);
+  console.log(`   ✅ Time Correction panel opened (clicked: "${clicked.text}"`);
 }
 
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
