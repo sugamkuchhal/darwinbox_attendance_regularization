@@ -154,14 +154,9 @@ async function openTimeCorrectionPanel(page, date) {
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
 
 async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
-  const [inHour, inMin]   = punchInTime.split(":");
-  const [outHour, outMin] = punchOutTime.split(":");
-
-  // Times are already pre-filled by Darwinbox (confirmed from screenshots)
-  // We skip filling times and use the pre-filled values
-  // The form shows correct 09:30 in and 18:00 out already
-  console.log(`   ℹ️  Times pre-filled by form — skipping spinner fill`);
-  console.log(`   ℹ️  Requested: in=${punchInTime} out=${punchOutTime} (using pre-filled values)`);
+  // Times are pre-filled by Darwinbox based on shift (confirmed from screenshots)
+  // TODO: implement custom time filling once Shadow DOM timepicker interaction is solved
+  console.log(`   ℹ️  Times pre-filled by form (requested: in=${punchInTime} out=${punchOutTime})`);
 
   // Select reason using coordinates
   // First scroll the reason dropdown into view so options open downward
@@ -279,9 +274,19 @@ async function regularizeAttendance(page) {
     } catch (err) {
       console.warn(`   ⚠️ Failed for ${date}: ${err.message}`);
       await page.screenshot({ path: `error_${date}.png` });
-      try { await page.keyboard.press("Escape"); await sleep(500); } catch (_) {}
-      try { await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 }); } catch (_) {}
-      await sleep(1000);
+      // Reload page to ensure clean state for next row — same as success path
+      try { await page.keyboard.press("Escape"); } catch (_) {}
+      await sleep(500);
+      try {
+        await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
+        await sleep(2000);
+        const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
+        if (await listSvg.count() > 0) {
+          await listSvg.locator("..").click({ timeout: 3000 });
+          await sleep(1500);
+        }
+        console.log(`   🔄 Page reloaded after error`);
+      } catch (_) {}
     }
   }
 
