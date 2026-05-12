@@ -155,30 +155,20 @@ async function openTimeCorrectionPanel(page, date) {
   // Step 2: click the ⋮ button to open dropdown
   const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
   await contextBtn.scrollIntoViewIfNeeded();
-  await sleep(300);
+  await sleep(500);
   await contextBtn.click({ timeout: 5000 });
   console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
+  await sleep(800);
 
-  // Step 3: poll until dbx-ds-menu-item appears inside the button (injected after dropdown opens)
-  // From DevTools: btn.querySelectorAll("dbx-ds-menu-item")[0].textContent === "Time Correction"
-  let clicked = false;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    await sleep(500);
-    const result = await page.evaluate((idx) => {
-      const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
-      if (!btn) return { ok: false, reason: "btn not found" };
-      const items = btn.querySelectorAll("dbx-ds-menu-item");
-      if (items.length === 0) return { ok: false, reason: `empty after poll (innerHTML len: ${btn.innerHTML.length})` };
-      const text = items[0].textContent.trim();
-      items[0].click();
-      return { ok: true, text };
-    }, btnIndex);
-    console.log(`   🔍 Poll ${attempt + 1}: ${JSON.stringify(result)}`);
-    if (result.ok) { clicked = true; break; }
-  }
-  if (!clicked) throw new Error("Time Correction menu item never appeared after 10 polls");
+  // Step 3: click "Time Correction" by coordinates — first item in dropdown
+  // Get the ⋮ button's bounding box, then click 40px below it (first menu item)
+  const btnBox = await contextBtn.boundingBox();
+  console.log(`   🔍 btn box: ${JSON.stringify(btnBox)}`);
+  const tcX = btnBox.x + btnBox.width / 2;
+  const tcY = btnBox.y + btnBox.height + 20; // 20px below button = "Time Correction"
+  await page.mouse.click(tcX, tcY);
+  console.log(`   ✅ Clicked Time Correction at (${Math.round(tcX)}, ${Math.round(tcY)})`);
   await sleep(2000);
-  console.log(`   ✅ Time Correction clicked`);
 }
 
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
