@@ -233,9 +233,21 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   console.log(`   ✅ Submitted for ${date}`);
   await page.screenshot({ path: `submitted_${date}.png` });
 
-  // Close modal by pressing Escape — works regardless of Shadow DOM
+  // Close modal by pressing Escape, then reload the page
+  // This ensures clean state for the next row — no lingering modal, fresh DOM
   await page.keyboard.press("Escape");
   await sleep(1000);
+  await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
+  await sleep(2000);
+  // Re-activate list view after reload
+  try {
+    const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
+    if (await listSvg.count() > 0) {
+      await listSvg.locator("..").click({ timeout: 3000 });
+      await sleep(1500);
+    }
+  } catch (_) {}
+  console.log(`   🔄 Page reloaded for next row`);
 }
 
 // ─── Main attendance regularization flow ─────────────────────────────────────
