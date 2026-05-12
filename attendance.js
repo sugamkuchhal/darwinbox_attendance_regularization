@@ -158,7 +158,12 @@ async function openTimeCorrectionPanel(page, date) {
   await sleep(300);
   await contextBtn.click({ timeout: 5000 });
   console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
-  await sleep(800);
+
+  // Wait for dbx-ds-menu-item to be injected into the button after dropdown opens
+  await page.waitForFunction((idx) => {
+    const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
+    return btn && btn.querySelectorAll("dbx-ds-menu-item").length > 0;
+  }, btnIndex, { timeout: 5000 });
 
   // Step 3: click dbx-ds-menu-item[0] = "Time Correction" — confirmed from DevTools
   // textContent of item[0] === "Time Correction", item[1] === "Attendance Register"
