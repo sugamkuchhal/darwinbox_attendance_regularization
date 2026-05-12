@@ -1,47 +1,44 @@
-const { DARWINBOX_URL, EMPLOYEE_ID, PUNCH_IN_BASE_HOUR, PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX, REASON } = require("./config");
+const { DARWINBOX_URL, EMPLOYEE_ID, PUNCH_IN_BASE_HOUR, PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX } = require("./config");
 const { sleep, randomTime } = require("./utils");
 
-// ─── Navigate to attendance page and switch to list view ─────────────────────
+// ─── Page navigation ──────────────────────────────────────────────────────────
 
-async function openAttendanceListView(page) {
-  const ATTENDANCE_URL = `${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`;
-  console.log(`📅 Navigating to: ${ATTENDANCE_URL}`);
-  await page.goto(ATTENDANCE_URL, { waitUntil: "networkidle" });
-  await sleep(3000);
-
-  console.log("📋 Switching to list view...");
+async function activateListView(page) {
   try {
     const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
-    const count   = await listSvg.count();
-    console.log(`🔍 Found ${count} list-view SVG(s)`);
-    if (count > 0) {
+    if (await listSvg.count() > 0) {
       await listSvg.locator("..").click({ timeout: 3000 });
+      await sleep(1500);
       console.log("✅ List view activated");
-    } else {
-      console.warn("⚠️ List view SVG not found — proceeding with current view");
     }
   } catch (err) {
     console.warn(`⚠️ List view toggle failed: ${err.message}`);
   }
-
-  await sleep(2000);
-  await page.screenshot({ path: "list_view.png" });
 }
 
-// ─── Scan rows for absent days with no pending request ────────────────────────
+async function reloadAttendancePage(page) {
+  await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
+  await sleep(2000);
+  await activateListView(page);
+}
 
-async function findAbsentDates(page) {
-  console.log("🔍 Scanning attendance rows...");
+// ─── Row scanning ─────────────────────────────────────────────────────────────
 
-  const todayStr = await page.evaluate(() => {
+async function getTodayStr(page) {
+  return page.evaluate(() => {
     const d  = new Date();
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     return `${dd}-${mm}-${d.getFullYear()}`;
   });
-  console.log(`📅 Today: ${todayStr} — skipping today and future dates`);
+}
 
-  const scanResult = await page.evaluate((today) => {
+async function findAbsentDates(page) {
+  console.log("🔍 Scanning attendance rows...");
+  const todayStr = await getTodayStr(page);
+  console.log(`📅 Today: ${todayStr} — skipping today and future`);
+
+  const { results, skipped, totalRows } = await page.evaluate((today) => {
     const results = [];
     const skipped = [];
     const seen    = new Set();
@@ -51,36 +48,36 @@ async function findAbsentDates(page) {
       return parseInt(yyyy + mm + dd, 10);
     }
     const todayNum = toNum(today);
+    let totalRows  = 0;
 
-    const rows      = [...document.querySelectorAll("table tr")];
-    let   totalRows = 0;
-
-    for (const row of rows) {
+    for (const row of document.querySelectorAll("table tr")) {
       const tds = [...row.querySelectorAll("td")];
       if (tds.length < 2) continue;
       totalRows++;
 
+      // Date — confirmed: td.primary-cell > span[dir="auto"]
       const dateSpan = row.querySelector('td.primary-cell span[dir="auto"]');
       if (!dateSpan) continue;
       const dateStr = (dateSpan.innerText || "").trim();
       if (!/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) continue;
 
       if (seen.has(dateStr))         { skipped.push({ date: dateStr, reason: "duplicate" }); continue; }
-      if (toNum(dateStr) >= todayNum){ skipped.push({ date: dateStr, reason: "today or future — skip" }); continue; }
+      if (toNum(dateStr) >= todayNum){ skipped.push({ date: dateStr, reason: "today or future" }); continue; }
       seen.add(dateStr);
 
-      const attendanceTd   = row.querySelector('td.primary-cell.sorting_1');
-      const attendanceSpan = attendanceTd ? attendanceTd.querySelector('span#dbx-overflow-span') : null;
-      const attendanceStatus = attendanceSpan ? (attendanceSpan.innerText || "").trim() : "";
+      // Attendance status — confirmed: td.primary-cell.sorting_1 > span#dbx-overflow-span
+      const attendanceSpan   = row.querySelector('td.primary-cell.sorting_1 span#dbx-overflow-span');
+      const attendanceStatus = (attendanceSpan?.innerText || "").trim();
 
+      // Request badge — confirmed: dbx-ds-status-tag presence means request exists (Shadow DOM)
       const hasRequestBadge = !!row.querySelector('dbx-ds-status-tag');
 
       if (attendanceStatus !== "Absent") {
-        skipped.push({ date: dateStr, reason: `not absent: ${attendanceStatus || "no status found"}` });
+        skipped.push({ date: dateStr, reason: `not absent: ${attendanceStatus || "unknown"}` });
         continue;
       }
       if (hasRequestBadge) {
-        skipped.push({ date: dateStr, reason: "request badge exists (dbx-ds-status-tag present)" });
+        skipped.push({ date: dateStr, reason: "request already exists" });
         continue;
       }
 
@@ -90,204 +87,158 @@ async function findAbsentDates(page) {
     return { results, skipped, totalRows };
   }, todayStr);
 
-  console.log(`🔍 Scanned ${scanResult.totalRows} table rows`);
-  if (scanResult.skipped.length > 0) {
-    console.log("⏭️  Skipped:");
-    scanResult.skipped.forEach(s => console.log(`   ${s.date} — ${s.reason}`));
-  }
-
-  return scanResult.results;
+  console.log(`🔍 Scanned ${totalRows} rows`);
+  skipped.forEach(s => console.log(`   ⏭️  ${s.date} — ${s.reason}`));
+  return results;
 }
 
-// ─── Open Time Correction panel for a given date ──────────────────────────────
+// ─── Context menu ─────────────────────────────────────────────────────────────
 
-async function openTimeCorrectionPanel(page, date) {
-  // Close any leftover modal from previous iteration
-  try {
-    await page.keyboard.press("Escape");
-    await sleep(500);
-    const cancelBtn = page.locator('dbx-ds-modal button:has-text("Cancel")');
-    if (await cancelBtn.count() > 0) {
-      await cancelBtn.first().click({ timeout: 2000 });
-      await sleep(500);
-    }
-  } catch (_) {}
-
-  // Find the DBX-DS-BUTTON.row_context_menu index for the target row
-  const btnIndex = await page.evaluate((targetDate) => {
-    const rows = [...document.querySelectorAll("table tr")];
-    const targetRow = rows.find(r => {
+async function findContextMenuIndex(page, date) {
+  const idx = await page.evaluate((targetDate) => {
+    const targetRow = [...document.querySelectorAll("table tr")].find(r => {
       const span = r.querySelector('td.primary-cell span[dir="auto"]');
       return span && (span.innerText || "").trim() === targetDate;
     });
     if (!targetRow) return -1;
-    const allBtns = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")];
-    for (let i = 0; i < allBtns.length; i++) {
-      if (targetRow.contains(allBtns[i])) return i;
-    }
-    return -1;
+    return [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")]
+      .findIndex(btn => targetRow.contains(btn));
   }, date);
 
-  console.log(`   🔍 row_context_menu btn index for ${date}: ${btnIndex}`);
-  if (btnIndex === -1) throw new Error(`Could not find row_context_menu button for ${date}`);
-
-  // Click the ⋮ button — confirmed working from previous runs
-  const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
-  await contextBtn.scrollIntoViewIfNeeded();
-  await sleep(500);
-  await contextBtn.click({ timeout: 5000 });
-  console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
-  await sleep(800);
-
-  // Click "Time Correction" by coordinate — confirmed working from screenshot
-  // "Time Correction" is the first item, ~20px below the bottom of the button
-  const btnBox = await contextBtn.boundingBox();
-  const tcX = btnBox.x + btnBox.width / 2;
-  const tcY = btnBox.y + btnBox.height + 20;
-  await page.mouse.click(tcX, tcY);
-  console.log(`   ✅ Clicked Time Correction at (${Math.round(tcX)}, ${Math.round(tcY)})`);
-  // Modal opens — wait for it to render (inputs are in Shadow DOM, not directly queryable)
-  await sleep(2000);
-  console.log(`   ✅ Time Correction panel open`);
+  if (idx === -1) throw new Error(`Row not found for date ${date}`);
+  return idx;
 }
 
-// ─── Fill and submit the Time Correction form ─────────────────────────────────
+async function openContextMenu(page, date) {
+  const idx = await findContextMenuIndex(page, date);
+  console.log(`   🔍 Context menu btn index: ${idx}`);
+  const btn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(idx);
+  await btn.scrollIntoViewIfNeeded();
+  await sleep(300);
+  await btn.click({ timeout: 5000 });
+  console.log(`   ✅ ⋮ clicked`);
+  await sleep(800);
+  return btn;
+}
 
-async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
-  // Times are pre-filled by Darwinbox based on shift (confirmed from screenshots)
-  // TODO: implement custom time filling once Shadow DOM timepicker interaction is solved
-  console.log(`   ℹ️  Times pre-filled by form (requested: in=${punchInTime} out=${punchOutTime})`);
+async function selectTimeCorrectionItem(page, btn) {
+  // "Time Correction" is the first dropdown item — confirmed from screenshots
+  // Rendered ~20px below the button bottom as a floating popover
+  const box = await btn.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 20);
+  console.log(`   ✅ Clicked Time Correction`);
+  await sleep(2000); // wait for modal to render
+}
 
-  // Select reason using coordinates
-  // First scroll the reason dropdown into view so options open downward
+// ─── Form filling ─────────────────────────────────────────────────────────────
+
+async function getReasonDropdownBox(page) {
+  // Reason is the second dbx-ds-dropdown (index 1) in the modal
+  // Scroll into view first so the options list opens downward
   await page.evaluate(() => {
-    const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
-    dropdown.scrollIntoView({ block: "center" });
+    document.querySelector("dbx-ds-modal")
+      .querySelectorAll("dbx-ds-dropdown")[1]
+      .scrollIntoView({ block: "center" });
   });
   await sleep(500);
 
-  // Get fresh bounding box after scroll
-  const reasonBox = await page.evaluate(() => {
-    const dropdowns = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown");
-    const r = dropdowns[1].getBoundingClientRect();
+  return page.evaluate(() => {
+    const r = document.querySelector("dbx-ds-modal")
+      .querySelectorAll("dbx-ds-dropdown")[1]
+      .getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   });
-  console.log(`   🔍 Reason dropdown box after scroll: ${JSON.stringify(reasonBox)}`);
+}
 
-  // Click center of dropdown to open it
-  const reasonX = reasonBox.x + reasonBox.width / 2;
-  const reasonY = reasonBox.y + reasonBox.height / 2;
-  await page.mouse.click(reasonX, reasonY);
-  console.log(`   🔍 Clicked reason dropdown at (${Math.round(reasonX)}, ${Math.round(reasonY)})`);
-  await sleep(1000);
+async function selectReason(page, date) {
+  const box = await getReasonDropdownBox(page);
+  console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
-  // Get the dropdown position again — options list renders below it
-  // Take a screenshot to see where options are
+  // Open the dropdown
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await sleep(800);
   await page.screenshot({ path: `reason_open_${date}.png` });
 
-  // "Forgot To Punch" is first option — it renders immediately below the dropdown
-  // From screenshot: option height is ~50px, first option center is ~25px below dropdown bottom
-  const forgotY = reasonBox.y + reasonBox.height + 25;
-  console.log(`   🔍 Clicking "Forgot To Punch" at (${Math.round(reasonX)}, ${Math.round(forgotY)})`);
-  await page.mouse.click(reasonX, forgotY);
+  // "Forgot To Punch" is first option — confirmed from screenshots, ~25px below dropdown bottom
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 25);
   await sleep(500);
 
-  // Verify by reading the dropdown head value from shadow DOM
-  const reasonSelected = await page.evaluate(() => {
+  // Verify via shadow DOM chain — confirmed working
+  const selected = await page.evaluate(() => {
     try {
-      const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
-      const span = dropdown.shadowRoot
-        .querySelector("dbx-internal-dropdown").shadowRoot
-        .querySelector("dbx-dropdown-head").shadowRoot
-        .querySelector("#dbx-overflow-span span");
-      return span ? span.innerText.trim() : "unknown";
-    } catch(e) { return "error: " + e.message; }
+      return document.querySelector("dbx-ds-modal")
+        .querySelectorAll("dbx-ds-dropdown")[1]
+        .shadowRoot.querySelector("dbx-internal-dropdown")
+        .shadowRoot.querySelector("dbx-dropdown-head")
+        .shadowRoot.querySelector("#dbx-overflow-span span")
+        .innerText.trim();
+    } catch (e) { return "error: " + e.message; }
   });
-  console.log(`   🔍 Reason selected value: "${reasonSelected}"`);
-  if (reasonSelected === "Select Reason" || reasonSelected === "unknown") {
-    throw new Error(`Reason not selected — still shows "${reasonSelected}". Check reason_open_${date}.png`);
+
+  console.log(`   🔍 Reason selected: "${selected}"`);
+  if (selected === "Select Reason" || selected.startsWith("error")) {
+    throw new Error(`Reason not selected — shows "${selected}". Check reason_open_${date}.png`);
   }
-  console.log(`   ✅ Reason selected: "${reasonSelected}"`);
-
-  await page.screenshot({ path: `before_submit_${date}.png` });
-
-  // Submit — click the Submit button using coordinates from the modal footer
-  // The Submit button is the second dbx-ds-button in the modal footer shadow root
-  const submitBox = await page.evaluate(() => {
-    const modalSR = document.querySelector("dbx-ds-modal").shadowRoot;
-    const footerBtns = modalSR.querySelectorAll(".footer dbx-ds-button");
-    // Submit is the last button in footer
-    const submitBtn = footerBtns[footerBtns.length - 1];
-    const r = submitBtn.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
-  });
-  console.log(`   🔍 Submit button box: ${JSON.stringify(submitBox)}`);
-  await page.mouse.click(submitBox.x + submitBox.width / 2, submitBox.y + submitBox.height / 2);
-  console.log(`   🔍 Clicked Submit`);
-  await sleep(3000);
-  console.log(`   ✅ Submitted for ${date}`);
-  await page.screenshot({ path: `submitted_${date}.png` });
-
-  // Close modal by pressing Escape, then reload the page
-  // This ensures clean state for the next row — no lingering modal, fresh DOM
-  await page.keyboard.press("Escape");
-  await sleep(1000);
-  await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
-  await sleep(2000);
-  // Re-activate list view after reload
-  try {
-    const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
-    if (await listSvg.count() > 0) {
-      await listSvg.locator("..").click({ timeout: 3000 });
-      await sleep(1500);
-    }
-  } catch (_) {}
-  console.log(`   🔄 Page reloaded for next row`);
 }
 
-// ─── Main attendance regularization flow ─────────────────────────────────────
+async function clickSubmit(page) {
+  // Submit is the last dbx-ds-button in the modal footer shadow root
+  const box = await page.evaluate(() => {
+    const btns = document.querySelector("dbx-ds-modal").shadowRoot.querySelectorAll(".footer dbx-ds-button");
+    const r    = btns[btns.length - 1].getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await sleep(3000);
+  console.log(`   ✅ Submitted`);
+}
+
+// ─── Per-date orchestration ───────────────────────────────────────────────────
+
+async function processDate(page, date) {
+  const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
+  const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
+  console.log(`\n📝 Processing: ${date} | in=${punchInTime} out=${punchOutTime}`);
+
+  try {
+    const btn = await openContextMenu(page, date);
+    await selectTimeCorrectionItem(page, btn);
+    await selectReason(page, date);
+    await page.screenshot({ path: `before_submit_${date}.png` });
+    await clickSubmit(page);
+    await page.screenshot({ path: `submitted_${date}.png` });
+    console.log(`   ✅ Done: ${date}`);
+  } catch (err) {
+    console.warn(`   ⚠️ Failed: ${date} — ${err.message}`);
+    await page.screenshot({ path: `error_${date}.png` });
+    try { await page.keyboard.press("Escape"); } catch (_) {}
+  }
+
+  // Always reload after each date — clean DOM, no lingering modal
+  await reloadAttendancePage(page);
+}
+
+// ─── Main entry point ─────────────────────────────────────────────────────────
 
 async function regularizeAttendance(page) {
-  await openAttendanceListView(page);
+  await reloadAttendancePage(page);
+  await page.screenshot({ path: "list_view.png" });
 
   const absentDates = await findAbsentDates(page);
 
   if (absentDates.length === 0) {
-    console.log("✅ No absent days needing regularization — nothing to do!");
+    console.log("✅ No absent days to regularize");
     await page.screenshot({ path: "regularization_result.png" });
     return;
   }
 
   console.log("─".repeat(50));
-  console.log(`📋 Found ${absentDates.length} absent day(s) to regularize:`);
+  console.log(`📋 ${absentDates.length} absent day(s) to regularize:`);
   absentDates.forEach((d, i) => console.log(`   ${i + 1}. ${d}`));
   console.log("─".repeat(50));
 
   for (const date of absentDates) {
-    const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
-    const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
-    console.log(`\n📝 Processing: ${date} | in: ${punchInTime} | out: ${punchOutTime}`);
-
-    try {
-      await openTimeCorrectionPanel(page, date);
-      await fillAndSubmitForm(page, date, punchInTime, punchOutTime);
-    } catch (err) {
-      console.warn(`   ⚠️ Failed for ${date}: ${err.message}`);
-      await page.screenshot({ path: `error_${date}.png` });
-      // Reload page to ensure clean state for next row — same as success path
-      try { await page.keyboard.press("Escape"); } catch (_) {}
-      await sleep(500);
-      try {
-        await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
-        await sleep(2000);
-        const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
-        if (await listSvg.count() > 0) {
-          await listSvg.locator("..").click({ timeout: 3000 });
-          await sleep(1500);
-        }
-        console.log(`   🔄 Page reloaded after error`);
-      } catch (_) {}
-    }
+    await processDate(page, date);
   }
 
   console.log(`\n✅ All done — processed ${absentDates.length} day(s)`);

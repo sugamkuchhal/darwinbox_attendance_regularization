@@ -1,4 +1,4 @@
-const { DARWINBOX_URL, WAIT_MINUTES, TIMEOUT_MS, POLL_INTERVAL_MS, MFA_METHOD_ORDER } = require("./config");
+const { DARWINBOX_URL, WAIT_MINUTES, TIMEOUT_MS, MFA_METHOD_ORDER } = require("./config");
 const { sleep } = require("./utils");
 const { createGitHubIssue, closeGitHubIssue, pollIssueForCode } = require("./github");
 
