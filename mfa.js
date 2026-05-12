@@ -199,7 +199,7 @@ const MFA_METHODS = {
 // Returns the OTP code string (or null for push/call), or throws if all fail.
 async function handleMFA(page) {
   console.log(`🔐 MFA detected. Trying: ${MFA_METHOD_ORDER.join(" → ")}`);
-  await page.screenshot({ path: "mfa_screen.png" });
+  await page.screenshot({ path: `mfa_screen_${Date.now()}.png` });
 
   for (let i = 0; i < MFA_METHOD_ORDER.length; i++) {
     const methodName = MFA_METHOD_ORDER[i];

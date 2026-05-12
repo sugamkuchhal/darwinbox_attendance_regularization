@@ -1,5 +1,5 @@
-const { DARWINBOX_URL, EMPLOYEE_ID, PUNCH_IN_BASE_HOUR, PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX } = require("./config");
-const { sleep, randomTime } = require("./utils");
+const { DARWINBOX_URL, EMPLOYEE_ID } = require("./config");
+const { sleep } = require("./utils");
 
 // ─── Page navigation ──────────────────────────────────────────────────────────
 
@@ -51,8 +51,7 @@ async function findAbsentDates(page) {
     let totalRows  = 0;
 
     for (const row of document.querySelectorAll("table tr")) {
-      const tds = [...row.querySelectorAll("td")];
-      if (tds.length < 2) continue;
+      if ([...row.querySelectorAll("td")].length < 2) continue;
       totalRows++;
 
       // Date — confirmed: td.primary-cell > span[dir="auto"]
@@ -92,6 +91,28 @@ async function findAbsentDates(page) {
   return results;
 }
 
+// ─── Success verification ─────────────────────────────────────────────────────
+
+async function verifySubmission(page, date) {
+  // After reload, check that the row now has a dbx-ds-status-tag (request badge)
+  const verified = await page.evaluate((targetDate) => {
+    const row = [...document.querySelectorAll("table tr")].find(r => {
+      const span = r.querySelector('td.primary-cell span[dir="auto"]');
+      return span && (span.innerText || "").trim() === targetDate;
+    });
+    if (!row) return { ok: false, reason: "row not found after reload" };
+    const hasBadge = !!row.querySelector('dbx-ds-status-tag');
+    return { ok: hasBadge, reason: hasBadge ? "badge present" : "no badge found — request may not have gone through" };
+  }, date);
+
+  if (verified.ok) {
+    console.log(`   ✅ Verified: ${date} — request badge confirmed`);
+  } else {
+    console.warn(`   ⚠️ Verification failed: ${date} — ${verified.reason}`);
+  }
+  return verified.ok;
+}
+
 // ─── Context menu ─────────────────────────────────────────────────────────────
 
 async function findContextMenuIndex(page, date) {
@@ -127,14 +148,19 @@ async function selectTimeCorrectionItem(page, btn) {
   const box = await btn.boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 20);
   console.log(`   ✅ Clicked Time Correction`);
-  await sleep(2000); // wait for modal to render
+
+  // Wait for modal — poll for reason dropdown to appear (up to 5s)
+  await page.waitForFunction(() => {
+    const modal = document.querySelector("dbx-ds-modal");
+    return modal && modal.querySelectorAll("dbx-ds-dropdown").length >= 2;
+  }, { timeout: 5000 });
+  console.log(`   ✅ Modal ready`);
 }
 
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Reason is the second dbx-ds-dropdown (index 1) in the modal
-  // Scroll into view first so the options list opens downward
+  // Scroll reason dropdown (index 1) into view so options open downward
   await page.evaluate(() => {
     document.querySelector("dbx-ds-modal")
       .querySelectorAll("dbx-ds-dropdown")[1]
@@ -150,20 +176,19 @@ async function getReasonDropdownBox(page) {
   });
 }
 
-async function selectReason(page, date) {
+async function selectReason(page) {
   const box = await getReasonDropdownBox(page);
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
   // Open the dropdown
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(800);
-  await page.screenshot({ path: `reason_open_${date}.png` });
 
   // "Forgot To Punch" is first option — confirmed from screenshots, ~25px below dropdown bottom
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 25);
   await sleep(500);
 
-  // Verify via shadow DOM chain — confirmed working
+  // Verify via confirmed shadow DOM chain
   const selected = await page.evaluate(() => {
     try {
       return document.querySelector("dbx-ds-modal")
@@ -177,7 +202,7 @@ async function selectReason(page, date) {
 
   console.log(`   🔍 Reason selected: "${selected}"`);
   if (selected === "Select Reason" || selected.startsWith("error")) {
-    throw new Error(`Reason not selected — shows "${selected}". Check reason_open_${date}.png`);
+    throw new Error(`Reason not selected — shows "${selected}"`);
   }
 }
 
@@ -193,29 +218,49 @@ async function clickSubmit(page) {
   console.log(`   ✅ Submitted`);
 }
 
-// ─── Per-date orchestration ───────────────────────────────────────────────────
+// ─── Per-date orchestration (with retry) ─────────────────────────────────────
+
+async function attemptDate(page, date) {
+  const btn = await openContextMenu(page, date);
+  await selectTimeCorrectionItem(page, btn);
+  await selectReason(page);
+  await clickSubmit(page);
+}
 
 async function processDate(page, date) {
-  const punchInTime  = randomTime(PUNCH_IN_BASE_HOUR,  PUNCH_RANDOM_MAX);
-  const punchOutTime = randomTime(PUNCH_OUT_BASE_HOUR, PUNCH_RANDOM_MAX);
-  console.log(`\n📝 Processing: ${date} | in=${punchInTime} out=${punchOutTime}`);
+  console.log(`\n📝 Processing: ${date}`);
 
-  try {
-    const btn = await openContextMenu(page, date);
-    await selectTimeCorrectionItem(page, btn);
-    await selectReason(page, date);
-    await page.screenshot({ path: `before_submit_${date}.png` });
-    await clickSubmit(page);
-    await page.screenshot({ path: `submitted_${date}.png` });
-    console.log(`   ✅ Done: ${date}`);
-  } catch (err) {
-    console.warn(`   ⚠️ Failed: ${date} — ${err.message}`);
-    await page.screenshot({ path: `error_${date}.png` });
-    try { await page.keyboard.press("Escape"); } catch (_) {}
+  let succeeded = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`   🔄 Retry attempt ${attempt}...`);
+        await reloadAttendancePage(page);
+      }
+      await attemptDate(page, date);
+      succeeded = true;
+      break;
+    } catch (err) {
+      console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
+      await page.screenshot({ path: `error_${date}_attempt${attempt}.png` });
+      try { await page.keyboard.press("Escape"); } catch (_) {}
+      await sleep(500);
+    }
   }
 
-  // Always reload after each date — clean DOM, no lingering modal
+  // Reload and verify regardless of outcome
   await reloadAttendancePage(page);
+
+  if (succeeded) {
+    const verified = await verifySubmission(page, date);
+    if (!verified) {
+      await page.screenshot({ path: `unverified_${date}.png` });
+    }
+  } else {
+    console.warn(`   ❌ All attempts failed for ${date}`);
+  }
+
+  return succeeded;
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -237,11 +282,17 @@ async function regularizeAttendance(page) {
   absentDates.forEach((d, i) => console.log(`   ${i + 1}. ${d}`));
   console.log("─".repeat(50));
 
+  const results = { succeeded: [], failed: [] };
   for (const date of absentDates) {
-    await processDate(page, date);
+    const ok = await processDate(page, date);
+    (ok ? results.succeeded : results.failed).push(date);
   }
 
-  console.log(`\n✅ All done — processed ${absentDates.length} day(s)`);
+  console.log("\n" + "─".repeat(50));
+  console.log(`✅ Succeeded (${results.succeeded.length}): ${results.succeeded.join(", ") || "none"}`);
+  if (results.failed.length > 0) {
+    console.warn(`❌ Failed    (${results.failed.length}): ${results.failed.join(", ")}`);
+  }
   await page.screenshot({ path: "regularization_result.png" });
 }
 
