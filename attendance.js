@@ -152,35 +152,22 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   🔍 row_context_menu btn index for ${date}: ${btnIndex}`);
   if (btnIndex === -1) throw new Error(`Could not find row_context_menu button for ${date}`);
 
-  // Step 2: scroll into view and click the ⋮ button
+  // Step 2: scroll into view, focus the ⋮ button and open with Enter
   const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
   await contextBtn.scrollIntoViewIfNeeded();
   await sleep(300);
-  await contextBtn.click({ timeout: 5000 });
-  console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
+  await contextBtn.focus();
+  await sleep(200);
+  await page.keyboard.press("Enter");
+  console.log(`   ✅ ⋮ opened via Enter (btn index ${btnIndex})`);
+  await sleep(800);
 
-  // Wait for dbx-ds-menu-item to be injected into the button after dropdown opens
-  await page.waitForFunction((idx) => {
-    const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
-    return btn && btn.querySelectorAll("dbx-ds-menu-item").length > 0;
-  }, btnIndex, { timeout: 5000 });
-
-  // Step 3: click dbx-ds-menu-item[0] = "Time Correction" — confirmed from DevTools
-  // textContent of item[0] === "Time Correction", item[1] === "Attendance Register"
-  const clicked = await page.evaluate((idx) => {
-    const btn = [...document.querySelectorAll("DBX-DS-BUTTON.row_context_menu")][idx];
-    if (!btn) return { ok: false, reason: "button not found at index" };
-    const items = btn.querySelectorAll("dbx-ds-menu-item");
-    if (items.length === 0) return { ok: false, reason: `no dbx-ds-menu-item found (btn innerHTML: ${btn.innerHTML.slice(0,200)})` };
-    const text = items[0].textContent.trim();
-    items[0].click();
-    return { ok: true, text };
-  }, btnIndex);
-
-  console.log(`   🔍 Menu item click: ${JSON.stringify(clicked)}`);
-  if (!clicked.ok) throw new Error(`Could not click Time Correction: ${clicked.reason}`);
+  // Step 3: Tab once to focus "Time Correction" (first item), Enter to select
+  await page.keyboard.press("Tab");
+  await sleep(200);
+  await page.keyboard.press("Enter");
   await sleep(2000);
-  console.log(`   ✅ Time Correction panel opened (clicked: "${clicked.text}"`);
+  console.log(`   ✅ Time Correction selected via keyboard`);
 }
 
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
