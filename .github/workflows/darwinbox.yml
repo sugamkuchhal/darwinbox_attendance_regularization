@@ -2,8 +2,9 @@ name: Darwinbox Attendance Regularization
 
 on:
   schedule:
-    # Runs every weekday at 9:30 PM IST (4:00 PM UTC)
-    - cron: "0 16 * * 1-5"
+    # Runs Mon–Sat at 10:00 AM IST (4:30 AM UTC)
+    # 2nd and 3rd Saturday skipped in code (index.js)
+    - cron: "30 4 * * 1-6"
 
   workflow_dispatch: # Manual trigger from GitHub UI
 
