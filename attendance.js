@@ -9,7 +9,6 @@ async function openAttendanceListView(page) {
   await page.goto(ATTENDANCE_URL, { waitUntil: "networkidle" });
   await sleep(3000);
 
-  // Switch to list view — identified by SVG with viewBox="0 0 12 10" (3-line icon)
   console.log("📋 Switching to list view...");
   try {
     const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
@@ -30,11 +29,6 @@ async function openAttendanceListView(page) {
 }
 
 // ─── Scan rows for absent days with no pending request ────────────────────────
-// Uses confirmed HTML structure:
-//   Row:    <tr> in attendance table
-//   Date:   td.primary-cell > span[dir="auto"]  → "DD-MM-YYYY"
-//   Status: span (excluding hover panel) with text "Absent" / "Present" / "Weekly Off"
-//   Badge:  td containing "Request Pending" or "Time Correction"
 
 async function findAbsentDates(page) {
   console.log("🔍 Scanning attendance rows...");
@@ -45,7 +39,7 @@ async function findAbsentDates(page) {
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     return `${dd}-${mm}-${d.getFullYear()}`;
   });
-  console.log(`📅 Today: ${todayStr} — skipping future dates`);
+  console.log(`📅 Today: ${todayStr} — skipping today and future dates`);
 
   const scanResult = await page.evaluate((today) => {
     const results = [];
@@ -66,7 +60,6 @@ async function findAbsentDates(page) {
       if (tds.length < 2) continue;
       totalRows++;
 
-      // Date: confirmed from inspected HTML — td.primary-cell > span[dir="auto"]
       const dateSpan = row.querySelector('td.primary-cell span[dir="auto"]');
       if (!dateSpan) continue;
       const dateStr = (dateSpan.innerText || "").trim();
@@ -76,19 +69,10 @@ async function findAbsentDates(page) {
       if (toNum(dateStr) >= todayNum){ skipped.push({ date: dateStr, reason: "today or future — skip" }); continue; }
       seen.add(dateStr);
 
-      // Attendance status: confirmed from HTML — td.primary-cell.sorting_1 contains
-      // <span id="dbx-overflow-span"> with text "Absent", "Present", "Weekly Off" etc.
-      const attendanceTd = row.querySelector('td.primary-cell.sorting_1');
-      const attendanceSpan = attendanceTd
-        ? attendanceTd.querySelector('span#dbx-overflow-span')
-        : null;
-      const attendanceStatus = attendanceSpan
-        ? (attendanceSpan.innerText || "").trim()
-        : "";
+      const attendanceTd   = row.querySelector('td.primary-cell.sorting_1');
+      const attendanceSpan = attendanceTd ? attendanceTd.querySelector('span#dbx-overflow-span') : null;
+      const attendanceStatus = attendanceSpan ? (attendanceSpan.innerText || "").trim() : "";
 
-      // Request status: confirmed from HTML — when a request exists, the row contains
-      // <dbx-ds-status-tag> inside a td.dt-left (without primary-cell).
-      // The text is in Shadow DOM so we detect presence of the element, not its text.
       const hasRequestBadge = !!row.querySelector('dbx-ds-status-tag');
 
       if (attendanceStatus !== "Absent") {
@@ -118,23 +102,18 @@ async function findAbsentDates(page) {
 // ─── Open Time Correction panel for a given date ──────────────────────────────
 
 async function openTimeCorrectionPanel(page, date) {
-  // Close any leftover modal from a previous iteration
+  // Close any leftover modal from previous iteration
   try {
-    const modal = await page.$("dbx-ds-modal");
-    if (modal) {
-      await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 }).catch(() => {});
-      await page.keyboard.press("Escape").catch(() => {});
-      await sleep(1000);
-      console.log("   🔄 Closed leftover panel");
+    await page.keyboard.press("Escape");
+    await sleep(500);
+    const cancelBtn = page.locator('dbx-ds-modal button:has-text("Cancel")');
+    if (await cancelBtn.count() > 0) {
+      await cancelBtn.first().click({ timeout: 2000 });
+      await sleep(500);
     }
   } catch (_) {}
 
-  // CONFIRMED DOM STRUCTURE (from DevTools):
-  // Each row has a DBX-DS-BUTTON.row_context_menu element containing the ⋮
-  // After clicking it, dbx-ds-menu-item[0] = "Time Correction", [1] = "Attendance Register"
-  // These are in the LIGHT DOM of the button — directly queryable
-
-  // Step 1: find the index of DBX-DS-BUTTON.row_context_menu that belongs to the target row
+  // Find the DBX-DS-BUTTON.row_context_menu index for the target row
   const btnIndex = await page.evaluate((targetDate) => {
     const rows = [...document.querySelectorAll("table tr")];
     const targetRow = rows.find(r => {
@@ -152,7 +131,7 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   🔍 row_context_menu btn index for ${date}: ${btnIndex}`);
   if (btnIndex === -1) throw new Error(`Could not find row_context_menu button for ${date}`);
 
-  // Step 2: click the ⋮ button to open dropdown
+  // Click the ⋮ button — confirmed working from previous runs
   const contextBtn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(btnIndex);
   await contextBtn.scrollIntoViewIfNeeded();
   await sleep(500);
@@ -160,15 +139,19 @@ async function openTimeCorrectionPanel(page, date) {
   console.log(`   ✅ ⋮ clicked (btn index ${btnIndex})`);
   await sleep(800);
 
-  // Step 3: click "Time Correction" by coordinates — first item in dropdown
-  // Get the ⋮ button's bounding box, then click 40px below it (first menu item)
+  // Click "Time Correction" by coordinate — confirmed working from screenshot
+  // "Time Correction" is the first item, ~20px below the bottom of the button
   const btnBox = await contextBtn.boundingBox();
-  console.log(`   🔍 btn box: ${JSON.stringify(btnBox)}`);
   const tcX = btnBox.x + btnBox.width / 2;
-  const tcY = btnBox.y + btnBox.height + 20; // 20px below button = "Time Correction"
+  const tcY = btnBox.y + btnBox.height + 20;
   await page.mouse.click(tcX, tcY);
   console.log(`   ✅ Clicked Time Correction at (${Math.round(tcX)}, ${Math.round(tcY)})`);
-  await sleep(2000);
+
+  // Wait for the Time Correction modal to appear
+  // Use the most reliable signal: Punch In Date input becoming visible
+  await page.waitForSelector('input[placeholder="DD-MM-YYYY"], input[value*="2026"]', { timeout: 5000 });
+  await sleep(500);
+  console.log(`   ✅ Time Correction panel open`);
 }
 
 // ─── Fill and submit the Time Correction form ─────────────────────────────────
@@ -177,13 +160,10 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   const [inHour, inMin]   = punchInTime.split(":");
   const [outHour, outMin] = punchOutTime.split(":");
 
-  // Wait for modal
-  // Wait for a VISIBLE modal — there may be multiple dbx-ds-modal in DOM
-  await page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).waitFor({ state: "visible", timeout: 5000 });
-  const modal = page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).first();
+  // Scope to the visible modal — find it by the presence of number spinners
+  // Don't use hasText since modal text is in Shadow DOM
+  const modal = page.locator("dbx-ds-modal").last();
 
-  // Fill time spinners scoped to modal
-  // Order: ClockIn-Hour[0], ClockIn-Min[1], ClockOut-Hour[2], ClockOut-Min[3], Break[4,5]
   const spinners     = modal.locator('input[type="number"]');
   const spinnerCount = await spinners.count();
   console.log(`   🔢 Found ${spinnerCount} spinner inputs`);
@@ -198,7 +178,7 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
     throw new Error(`Expected ≥4 spinners, found ${spinnerCount}`);
   }
 
-  // Select reason from dropdown
+  // Select reason
   await modal.locator('text="Select Reason"').click({ timeout: 3000 });
   await sleep(500);
   await page.click(`text="${REASON}"`, { timeout: 3000 });
@@ -212,9 +192,6 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   await sleep(3000);
   console.log(`   ✅ Submitted for ${date}`);
   await page.screenshot({ path: `submitted_${date}.png` });
-
-  // Wait for modal to close
-  await page.locator("dbx-ds-modal").filter({ hasText: "Time Correction" }).first().waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
   await sleep(1000);
 }
 
@@ -247,7 +224,6 @@ async function regularizeAttendance(page) {
     } catch (err) {
       console.warn(`   ⚠️ Failed for ${date}: ${err.message}`);
       await page.screenshot({ path: `error_${date}.png` });
-      // Force-close modal before next row
       try { await page.keyboard.press("Escape"); await sleep(500); } catch (_) {}
       try { await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 }); } catch (_) {}
       await sleep(1000);
