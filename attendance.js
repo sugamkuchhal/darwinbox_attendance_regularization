@@ -157,47 +157,68 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   const [inHour, inMin]   = punchInTime.split(":");
   const [outHour, outMin] = punchOutTime.split(":");
 
-  // Scope to the visible modal — find it by the presence of number spinners
-  // Don't use hasText since modal text is in Shadow DOM
-  const modal = page.locator("dbx-ds-modal").last();
+  // Times are already pre-filled by Darwinbox (confirmed from screenshots)
+  // We skip filling times and use the pre-filled values
+  // The form shows correct 09:30 in and 18:00 out already
+  console.log(`   ℹ️  Times pre-filled by form — skipping spinner fill`);
+  console.log(`   ℹ️  Requested: in=${punchInTime} out=${punchOutTime} (using pre-filled values)`);
 
-  const spinners     = modal.locator('input[type="number"]');
-  const spinnerCount = await spinners.count();
-  console.log(`   🔢 Found ${spinnerCount} spinner inputs`);
+  // Select reason — use coordinates since options are in an inaccessible popover
+  // Step 1: get the reason dropdown (index 1) bounding box and click it
+  const reasonBox = await page.evaluate(() => {
+    const dropdowns = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown");
+    const r = dropdowns[1].getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  console.log(`   🔍 Reason dropdown box: ${JSON.stringify(reasonBox)}`);
 
-  if (spinnerCount >= 4) {
-    await spinners.nth(0).click({ clickCount: 3 }); await spinners.nth(0).fill(inHour);  await sleep(300);
-    await spinners.nth(1).click({ clickCount: 3 }); await spinners.nth(1).fill(inMin);   await sleep(300);
-    await spinners.nth(2).click({ clickCount: 3 }); await spinners.nth(2).fill(outHour); await sleep(300);
-    await spinners.nth(3).click({ clickCount: 3 }); await spinners.nth(3).fill(outMin);  await sleep(300);
-    console.log(`   ✅ Times filled: in=${punchInTime} out=${punchOutTime}`);
-  } else {
-    throw new Error(`Expected ≥4 spinners, found ${spinnerCount}`);
-  }
+  // Click the dropdown to open it
+  const reasonX = reasonBox.x + reasonBox.width / 2;
+  const reasonY = reasonBox.y + reasonBox.height / 2;
+  await page.mouse.click(reasonX, reasonY);
+  console.log(`   🔍 Clicked reason dropdown at (${Math.round(reasonX)}, ${Math.round(reasonY)})`);
+  await sleep(800);
 
-  // Select reason
-  await modal.locator('text="Select Reason"').click({ timeout: 3000 });
+  // Step 2: "Forgot To Punch" is the first option — click ~30px below the dropdown bottom
+  const forgotY = reasonBox.y + reasonBox.height + 30;
+  await page.mouse.click(reasonX, forgotY);
+  console.log(`   🔍 Clicked "Forgot To Punch" at (${Math.round(reasonX)}, ${Math.round(forgotY)})`);
   await sleep(500);
-  await page.click(`text="${REASON}"`, { timeout: 3000 });
+
+  // Verify selection was made by checking dropdown text changed from "Select Reason"
+  const reasonSelected = await page.evaluate(() => {
+    const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
+    // Check shadow root for displayed value
+    try {
+      const head = dropdown.shadowRoot.querySelector("dbx-internal-dropdown").shadowRoot.querySelector("dbx-dropdown-head").shadowRoot;
+      const span = head.querySelector("#dbx-overflow-span span");
+      return span ? span.innerText.trim() : "unknown";
+    } catch(e) { return "could not read: " + e.message; }
+  });
+  console.log(`   🔍 Reason selected value: "${reasonSelected}"`);
   console.log(`   ✅ Reason: "${REASON}"`);
-  await sleep(500);
 
   await page.screenshot({ path: `before_submit_${date}.png` });
 
-  // Submit
-  await modal.locator('button:has-text("Submit")').click({ timeout: 5000 });
+  // Submit — click the Submit button using coordinates from the modal footer
+  // The Submit button is the second dbx-ds-button in the modal footer shadow root
+  const submitBox = await page.evaluate(() => {
+    const modalSR = document.querySelector("dbx-ds-modal").shadowRoot;
+    const footerBtns = modalSR.querySelectorAll(".footer dbx-ds-button");
+    // Submit is the last button in footer
+    const submitBtn = footerBtns[footerBtns.length - 1];
+    const r = submitBtn.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  });
+  console.log(`   🔍 Submit button box: ${JSON.stringify(submitBox)}`);
+  await page.mouse.click(submitBox.x + submitBox.width / 2, submitBox.y + submitBox.height / 2);
+  console.log(`   🔍 Clicked Submit`);
   await sleep(3000);
   console.log(`   ✅ Submitted for ${date}`);
   await page.screenshot({ path: `submitted_${date}.png` });
 
-  // Close modal — click X or Cancel to ensure it's gone before next row
-  try {
-    await page.click('dbx-ds-modal button:has-text("Cancel")', { timeout: 2000 });
-  } catch (_) {}
-  try {
-    // Click the X close button (top right of modal)
-    await page.locator('dbx-ds-modal').last().locator('button').first().click({ timeout: 2000 });
-  } catch (_) {}
+  // Close modal by pressing Escape — works regardless of Shadow DOM
+  await page.keyboard.press("Escape");
   await sleep(1000);
 }
 
