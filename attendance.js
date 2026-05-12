@@ -163,40 +163,56 @@ async function fillAndSubmitForm(page, date, punchInTime, punchOutTime) {
   console.log(`   ℹ️  Times pre-filled by form — skipping spinner fill`);
   console.log(`   ℹ️  Requested: in=${punchInTime} out=${punchOutTime} (using pre-filled values)`);
 
-  // Select reason — use coordinates since options are in an inaccessible popover
-  // Step 1: get the reason dropdown (index 1) bounding box and click it
+  // Select reason using coordinates
+  // First scroll the reason dropdown into view so options open downward
+  await page.evaluate(() => {
+    const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
+    dropdown.scrollIntoView({ block: "center" });
+  });
+  await sleep(500);
+
+  // Get fresh bounding box after scroll
   const reasonBox = await page.evaluate(() => {
     const dropdowns = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown");
     const r = dropdowns[1].getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   });
-  console.log(`   🔍 Reason dropdown box: ${JSON.stringify(reasonBox)}`);
+  console.log(`   🔍 Reason dropdown box after scroll: ${JSON.stringify(reasonBox)}`);
 
-  // Click the dropdown to open it
+  // Click center of dropdown to open it
   const reasonX = reasonBox.x + reasonBox.width / 2;
   const reasonY = reasonBox.y + reasonBox.height / 2;
   await page.mouse.click(reasonX, reasonY);
   console.log(`   🔍 Clicked reason dropdown at (${Math.round(reasonX)}, ${Math.round(reasonY)})`);
-  await sleep(800);
+  await sleep(1000);
 
-  // Step 2: "Forgot To Punch" is the first option — click ~30px below the dropdown bottom
-  const forgotY = reasonBox.y + reasonBox.height + 30;
+  // Get the dropdown position again — options list renders below it
+  // Take a screenshot to see where options are
+  await page.screenshot({ path: `reason_open_${date}.png` });
+
+  // "Forgot To Punch" is first option — it renders immediately below the dropdown
+  // From screenshot: option height is ~50px, first option center is ~25px below dropdown bottom
+  const forgotY = reasonBox.y + reasonBox.height + 25;
+  console.log(`   🔍 Clicking "Forgot To Punch" at (${Math.round(reasonX)}, ${Math.round(forgotY)})`);
   await page.mouse.click(reasonX, forgotY);
-  console.log(`   🔍 Clicked "Forgot To Punch" at (${Math.round(reasonX)}, ${Math.round(forgotY)})`);
   await sleep(500);
 
-  // Verify selection was made by checking dropdown text changed from "Select Reason"
+  // Verify by reading the dropdown head value from shadow DOM
   const reasonSelected = await page.evaluate(() => {
-    const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
-    // Check shadow root for displayed value
     try {
-      const head = dropdown.shadowRoot.querySelector("dbx-internal-dropdown").shadowRoot.querySelector("dbx-dropdown-head").shadowRoot;
-      const span = head.querySelector("#dbx-overflow-span span");
+      const dropdown = document.querySelector("dbx-ds-modal").querySelectorAll("dbx-ds-dropdown")[1];
+      const span = dropdown.shadowRoot
+        .querySelector("dbx-internal-dropdown").shadowRoot
+        .querySelector("dbx-dropdown-head").shadowRoot
+        .querySelector("#dbx-overflow-span span");
       return span ? span.innerText.trim() : "unknown";
-    } catch(e) { return "could not read: " + e.message; }
+    } catch(e) { return "error: " + e.message; }
   });
   console.log(`   🔍 Reason selected value: "${reasonSelected}"`);
-  console.log(`   ✅ Reason: "${REASON}"`);
+  if (reasonSelected === "Select Reason" || reasonSelected === "unknown") {
+    throw new Error(`Reason not selected — still shows "${reasonSelected}". Check reason_open_${date}.png`);
+  }
+  console.log(`   ✅ Reason selected: "${reasonSelected}"`);
 
   await page.screenshot({ path: `before_submit_${date}.png` });
 
