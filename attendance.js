@@ -184,40 +184,49 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Strict contract: locate row whose text starts with "Reason", then get dropdown inside that row.
+  // Phase A: render gate — scroll modal body until Reason row + dropdown is present.
   const result = await page.evaluate(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const rows = [...modal.querySelectorAll("div")].map((row, idx) => {
-      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
-      const dd = row.querySelector("dbx-ds-dropdown");
-      const rr = row.getBoundingClientRect();
-      const dr = dd ? dd.getBoundingClientRect() : null;
-      return {
-        idx,
-        text: txt.slice(0, 80),
-        hasDropdown: !!dd,
-        rowRect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
-        dropdownRect: dr ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.width), h: Math.round(dr.height) } : null,
-      };
-    }).filter(r => r.text.length > 0);
+    const scroller = modal.querySelector(".body") || modal;
+    let found = null;
+    const attempts = [];
+    for (let step = 0; step < 8; step++) {
+      const rows = [...modal.querySelectorAll("div")].map((row, idx) => {
+        const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
+        const dd = row.querySelector("dbx-ds-dropdown");
+        const rr = row.getBoundingClientRect();
+        const dr = dd ? dd.getBoundingClientRect() : null;
+        return {
+          idx, text: txt.slice(0, 80), hasDropdown: !!dd,
+          rowRect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
+          dropdownRect: dr ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.width), h: Math.round(dr.height) } : null,
+        };
+      }).filter(r => r.text.length > 0);
+      attempts.push({ step, scrollTop: scroller.scrollTop || 0, rowSample: rows.slice(0, 25) });
 
-    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => {
-      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
-      return /^Reason\b/i.test(txt);
-    });
-    if (reasonRows.length === 0) {
-      return { ok: false, reason: "Reason row not found", rowMap: rows.slice(0, 80) };
+      const reasonRows = [...modal.querySelectorAll("div")].filter((row) => /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim()));
+      if (reasonRows.length > 0) {
+        const reasonRow = reasonRows[0];
+        const reason = reasonRow.querySelector("dbx-ds-dropdown") || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
+        if (reason) {
+          found = { reasonRow, reason, attempts };
+          break;
+        }
+      }
+
+      const before = scroller.scrollTop || 0;
+      scroller.scrollTop = before + 220;
+      if ((scroller.scrollTop || 0) === before) break;
     }
 
-    const reasonRow = reasonRows[0];
-    const reason = reasonRow.querySelector("dbx-ds-dropdown")
-      || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
-    if (!reason) {
-      return { ok: false, reason: "Reason dropdown missing in reason row", rowMap: rows.slice(0, 80) };
+    if (!found) {
+      return { ok: false, reason: "Reason row/dropdown not found after scroll scan", attempts };
     }
 
+    const reasonRow = found.reasonRow;
+    const reason = found.reason;
     reason.scrollIntoView({ block: "center" });
     const r = reason.getBoundingClientRect();
     const reasonRowRect = reasonRow.getBoundingClientRect();
@@ -225,16 +234,16 @@ async function getReasonDropdownBox(page) {
       ok: true,
       box: { x: r.x, y: r.y, width: r.width, height: r.height },
       reasonRowRect: { x: Math.round(reasonRowRect.x), y: Math.round(reasonRowRect.y), w: Math.round(reasonRowRect.width), h: Math.round(reasonRowRect.height) },
-      rowMap: rows.slice(0, 80)
+      attempts: found.attempts
     };
   });
 
   if (!result.ok) {
-    console.log(`   🧭 Row map: ${JSON.stringify(result.rowMap || [])}`);
+    console.log(`   🧭 Render gate attempts: ${JSON.stringify(result.attempts || [])}`);
     throw new Error(result.reason);
   }
   console.log(`   🧭 Reason row rect: ${JSON.stringify(result.reasonRowRect)}`);
-  console.log(`   🧭 Row map sample: ${JSON.stringify((result.rowMap || []).slice(0, 20))}`);
+  console.log(`   🧭 Render gate attempts: ${JSON.stringify((result.attempts || []).slice(0, 4))}`);
   await sleep(500);
   return result.box;
 }
@@ -254,6 +263,26 @@ async function selectReason(page) {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(300);
   await page.screenshot({ path: "reason_after_reopen_click.png" });
+
+  // Phase B: open-state gate — verify popup/listbox-like content appears.
+  const openState = await page.evaluate(() => {
+    const hints = [...document.querySelectorAll("body *")].filter((el) => {
+      const txt = (el.textContent || "").trim();
+      return txt.includes("Forgot To Punch") || txt.includes("Machine Not Working") || txt.includes("Work From Home");
+    }).map((el) => {
+      const r = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return {
+        tag: el.tagName,
+        visible: r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden",
+        rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+        text: (el.textContent || "").trim().slice(0, 80)
+      };
+    });
+    return hints.slice(0, 30);
+  });
+  console.log(`   🧭 Open-state hints count: ${openState.length}`);
+  openState.forEach((h, i) => console.log(`      [open ${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} text="${h.text}"`));
 
   const optionDiagnostics = await page.evaluate(() => {
     const hits = [];
@@ -280,6 +309,10 @@ async function selectReason(page) {
   });
   console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
   optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
+  if (optionDiagnostics.length === 0) {
+    await page.screenshot({ path: "reason_open_state_no_options.png" });
+    throw new Error("Reason dropdown open-state gate failed: no options rendered");
+  }
 
   // Step 2: strict option selection from visible list.
   const option = page.getByText("Forgot To Punch", { exact: true }).first();
