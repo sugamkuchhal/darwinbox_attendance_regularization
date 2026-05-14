@@ -184,33 +184,82 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Scroll reason dropdown (index 1) into view so options open downward
-  await page.evaluate(() => {
-    document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .scrollIntoView({ block: "center" });
-  });
-  await sleep(500);
+  // Deterministically find the Reason dropdown by label text, scrolling modal body if needed.
+  const result = await page.evaluate(() => {
+    const modal = document.querySelector("dbx-ds-modal");
+    if (!modal) return { ok: false, reason: "modal not found" };
 
-  return page.evaluate(() => {
-    const r = document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    const scroller = modal.querySelector(".body") || modal;
+    const maxSteps = 8;
+    for (let step = 0; step < maxSteps; step++) {
+      const labels = [...modal.querySelectorAll("*")].filter((el) => {
+        const text = (el.textContent || "").trim();
+        return /^Reason\b/i.test(text);
+      });
+      if (labels.length > 0) {
+        const label = labels[0];
+        const dropdown = label.closest("div")?.querySelector("dbx-ds-dropdown")
+          || label.parentElement?.querySelector("dbx-ds-dropdown")
+          || label.parentElement?.nextElementSibling?.querySelector?.("dbx-ds-dropdown");
+        if (!dropdown) return { ok: false, reason: "Reason dropdown not found near label" };
+
+        dropdown.scrollIntoView({ block: "center" });
+        const r = dropdown.getBoundingClientRect();
+        return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height }, step };
+      }
+
+      // Advance modal scroll to render lower fields (Reason/Message are below fold).
+      const before = scroller.scrollTop || 0;
+      scroller.scrollTop = before + 220;
+      if (scroller.scrollTop === before) break;
+    }
+    return { ok: false, reason: "Reason label not found after modal scroll scan" };
   });
+
+  if (!result.ok) throw new Error(result.reason);
+  console.log(`   🧭 Reason label found after scroll step: ${result.step ?? 0}`);
+  await sleep(500);
+  return result.box;
 }
 
 async function selectReason(page) {
   const box = await getReasonDropdownBox(page);
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
-  // Open the dropdown
+  // Step 1: open reason dropdown by clicking its center.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(800);
+  await sleep(400);
 
-  // "Forgot To Punch" is first option — confirmed from screenshots, ~25px below dropdown bottom
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 25);
-  await sleep(500);
+  // Step 2: deterministic diagnostics for visible "Forgot To Punch" candidates.
+  const candidates = await page.evaluate(() => {
+    const text = "Forgot To Punch";
+    const nodes = [...document.querySelectorAll("body *")].filter((el) => {
+      const t = (el.textContent || "").trim();
+      if (t !== text) return false;
+      const r = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    }).map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, tag: el.tagName, className: el.className || "" };
+    });
+    return nodes;
+  });
+  console.log(`   🧭 Reason option visible candidates: ${candidates.length}`);
+  candidates.slice(0, 3).forEach((c, i) => console.log(`      [${i}] ${c.tag} (${Math.round(c.x)},${Math.round(c.y)}) ${Math.round(c.width)}x${Math.round(c.height)}`));
+
+  // Step 3: click deterministic target if visible candidate exists.
+  if (candidates.length > 0) {
+    const target = candidates[0];
+    await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+    await sleep(400);
+  } else {
+    await page.screenshot({ path: "reason_option_not_visible.png" });
+    throw new Error("Reason option 'Forgot To Punch' not visible after opening dropdown");
+  }
+
+  // Step 4: verify via confirmed shadow DOM chain.
+  await sleep(300);
 
   // Verify via confirmed shadow DOM chain
   const selected = await page.evaluate(() => {
@@ -226,6 +275,7 @@ async function selectReason(page) {
 
   console.log(`   🔍 Reason selected: "${selected}"`);
   if (selected === "Select Reason" || selected.startsWith("error")) {
+    await page.screenshot({ path: "reason_selection_verification_failed.png" });
     throw new Error(`Reason not selected — shows "${selected}"`);
   }
 }
