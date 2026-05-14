@@ -39,6 +39,7 @@ jobs:
           DARWINBOX_USERNAME: ${{ secrets.DARWINBOX_USERNAME }}
           DARWINBOX_PASSWORD: ${{ secrets.DARWINBOX_PASSWORD }}
           DARWINBOX_EMPLOYEE_ID: ${{ secrets.DARWINBOX_EMPLOYEE_ID }}
+          DARWINBOX_TOTP_SECRET: ${{ secrets.DARWINBOX_TOTP_SECRET }}
           GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}      # auto-provided, no setup needed
           GITHUB_REPOSITORY:  ${{ github.repository }}         # auto-provided, no setup needed
         run: node index.js
