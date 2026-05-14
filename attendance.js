@@ -204,12 +204,14 @@ async function selectReason(page) {
   const box = await getReasonDropdownBox(page);
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
-  // Open the dropdown
+  // Open reason dropdown by clicking its center.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(800);
 
-  // "Forgot To Punch" is first option — confirmed from screenshots, ~25px below dropdown bottom
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 25);
+  // Select by visible text instead of coordinate offsets.
+  // This avoids failures when the options render in a floating/portal/shadow container.
+  const option = page.getByText("Forgot To Punch", { exact: true }).first();
+  await option.waitFor({ state: "visible", timeout: 4000 });
+  await option.click({ timeout: 4000 });
   await sleep(500);
 
   // Verify via confirmed shadow DOM chain
