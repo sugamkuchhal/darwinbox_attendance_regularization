@@ -194,18 +194,44 @@ async function getReasonDropdownBox(page) {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const scroller = modal.querySelector(".body") || modal;
+    const isScrollable = (el) => {
+      if (!el) return false;
+      const style = window.getComputedStyle(el);
+      const overflowY = style.overflowY || "";
+      return (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 8;
+    };
+
+    const allCandidates = [modal, ...modal.querySelectorAll("*")].filter(isScrollable);
+    if (allCandidates.length === 0) {
+      return { ok: false, reason: "no scrollable container found in modal", scrollTrace: [] };
+    }
+
+    // Prefer right-side pane-like container: right-most visible scrollable area.
+    const ranked = allCandidates
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 120 && rect.height > 120)
+      .sort((a, b) => b.rect.right - a.rect.right || b.rect.height - a.rect.height);
+
+    const scroller = (ranked[0] && ranked[0].el) || allCandidates[0];
     const scrollTrace = [];
-    for (let step = 0; step < 20; step++) {
+    for (let step = 0; step < 30; step++) {
       const before = scroller.scrollTop || 0;
       scroller.scrollTop = before + 220;
       const after = scroller.scrollTop || 0;
       scrollTrace.push({ step, before, after });
-      if (after === before) break;
+      if (after === before && step > 0) break;
     }
     scroller.scrollTop = scroller.scrollHeight;
+    scrollTrace.push({
+      step: "force-bottom",
+      before: scroller.scrollTop || 0,
+      after: scroller.scrollTop || 0,
+      max: Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0))
+    });
 
-    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim()));
+    const reasonRows = [...scroller.querySelectorAll("div"), ...modal.querySelectorAll("div")].filter((row) =>
+      /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim())
+    );
     if (reasonRows.length === 0) return { ok: false, reason: "Reason row not found after bottom scroll", scrollTrace };
 
     const reasonRow = reasonRows[0];
