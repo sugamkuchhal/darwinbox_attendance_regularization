@@ -93,13 +93,17 @@ async function handleMfaIfPresent(page) {
   const codeInputVisible = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
   if (codeInputVisible) {
     console.log("🔐 MFA code-entry screen detected first. Attempting direct TOTP flow.");
-    const directTotp = getTotpCodes();
-    const codePassed = await submitCodeWithOneRetry(directTotp);
-    if (codePassed) {
-      console.log("✅ MFA direct TOTP flow completed");
-      return;
+    try {
+      const directTotp = getTotpCodes();
+      const codePassed = await submitCodeWithOneRetry(directTotp);
+      if (codePassed) {
+        console.log("✅ MFA direct TOTP flow completed");
+        return;
+      }
+      console.warn("⚠️ Direct TOTP attempts failed. Trying fallback methods from picker...");
+    } catch (err) {
+      console.warn(`⚠️ Direct TOTP unavailable: ${err.message}. Falling back to picker methods...`);
     }
-    console.warn("⚠️ Direct TOTP attempts failed. Trying fallback methods from picker...");
     try { await page.click('a:has-text("Sign in another way"), a:has-text("other way"), a:has-text("different")', { timeout: 5000 }); } catch (_) {}
     await sleep(1500);
   }
