@@ -1,6 +1,51 @@
-const { DARWINBOX_URL, WAIT_MINUTES, TIMEOUT_MS, POLL_INTERVAL_MS, MFA_METHOD_ORDER } = require("./config");
+const crypto = require("crypto");
+const { DARWINBOX_URL, WAIT_MINUTES, TIMEOUT_MS, POLL_INTERVAL_MS, MFA_METHOD_ORDER, DARWINBOX_TOTP_SECRET } = require("./config");
 const { sleep } = require("./utils");
 const { createGitHubIssue, closeGitHubIssue, pollIssueForCode } = require("./github");
+
+function base32ToBuffer(base32) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = (base32 || "").toUpperCase().replace(/=+$/g, "").replace(/\s+/g, "");
+  let bits = "";
+  for (const ch of clean) {
+    const idx = alphabet.indexOf(ch);
+    if (idx === -1) throw new Error(`Invalid base32 character "${ch}"`);
+    bits += idx.toString(2).padStart(5, "0");
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTotp(secret, timestampMs = Date.now(), stepSeconds = 30, digits = 6) {
+  const key = base32ToBuffer(secret);
+  const counter = Math.floor(timestampMs / 1000 / stepSeconds);
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(counter));
+
+  const hmac = crypto.createHmac("sha1", key).update(msg).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binCode =
+    ((hmac[offset] & 0x7f) << 24) |
+    (hmac[offset + 1] << 16) |
+    (hmac[offset + 2] << 8) |
+    hmac[offset + 3];
+  const otp = (binCode % (10 ** digits)).toString().padStart(digits, "0");
+  return otp;
+}
+
+function getTotpCodes() {
+  const rawSecret = (DARWINBOX_TOTP_SECRET || "").trim();
+  if (!rawSecret || rawSecret === "123456") {
+    throw new Error("DARWINBOX_TOTP_SECRET is missing/placeholder");
+  }
+  return {
+    code: generateTotp(rawSecret),
+    retryCode: generateTotp(rawSecret, Date.now() + 30_000),
+  };
+}
 
 // ─── Shared MFA helpers ───────────────────────────────────────────────────────
 
@@ -58,79 +103,45 @@ async function pollPageForApproval(page, label) {
 //               { success: false }                   on timeout/failure
 // code is null for push/call (page navigates automatically), string for code-based methods.
 
-async function tryMfaPush(page) {
-  const LABEL = "MFA_PUSH";
-  console.log(`\n🔔 [${LABEL}] Sending push notification via Microsoft Authenticator...`);
-
-  await clickOption(page, [
-    'div[data-value="PhoneAppNotification"]',
-    '[data-bind*="PhoneAppNotification"]',
-    'div:has-text("Approve a request")',
-    'li:has-text("Approve a request")',
-  ], LABEL);
-  await sleep(2000);
-
-  const issueNumber = await createGitHubIssue(
-    "🔐 [MFA Push] Approve the Authenticator notification on your phone",
-    `## Darwinbox automation: MFA Push approval needed\n\n` +
-    `A push notification has been sent to your **Microsoft Authenticator app**.\n\n` +
-    `**👉 Open your Authenticator app and tap Approve.**\n\n` +
-    `⏰ You have **${WAIT_MINUTES * 60} seconds**. No reply needed here — just approve on your phone.\n\n` +
-    `_This issue will close automatically. If you miss it, the next method will be tried._`
-  );
-
-  const approved = await pollPageForApproval(page, LABEL);
-
-  if (approved) {
-    await closeGitHubIssue(issueNumber, "✅ Push approved! Continuing with login...");
-    return { success: true, code: null };
-  }
-
-  await closeGitHubIssue(issueNumber, `⏰ Push not approved in ${WAIT_MINUTES * 60}s. Trying next method...`);
-  return { success: false };
-}
-
 async function tryMfaCode(page) {
   const LABEL = "MFA_CODE";
   console.log(`\n🔢 [${LABEL}] Requesting 6-digit code from Microsoft Authenticator...`);
 
-  await clickOption(page, [
+  const clicked = await clickOption(page, [
     'div[data-value="PhoneAppOTP"]',
     '[data-bind*="PhoneAppOTP"]',
     'div:has-text("Use a verification code")',
     'li:has-text("verification code")',
   ], LABEL);
+  if (!clicked) {
+    console.warn(`⚠️ [${LABEL}] Verification code option not available on this challenge screen`);
+    return { success: false };
+  }
   await sleep(2000);
 
-  const issueNumber = await createGitHubIssue(
-    "🔐 [MFA Code] Enter your Authenticator app code",
-    `## Darwinbox automation: Authenticator app code needed\n\n` +
-    `Open your **Microsoft Authenticator app** and find the 6-digit code for your Arvind account.\n\n` +
-    `**👉 Reply to this issue with just the code** (e.g. \`123456\`)\n\n` +
-    `⏰ You have **${WAIT_MINUTES * 60} seconds** to respond.\n\n` +
-    `_Authenticator codes rotate every 30 seconds — reply quickly._`
-  );
-
-  const code = await pollIssueForCode(issueNumber, LABEL);
-
-  if (code) {
-    await closeGitHubIssue(issueNumber, "✅ Code received. Submitting now...");
-    return { success: true, code };
+  try {
+    const { code, retryCode } = getTotpCodes();
+    console.log(`✅ [${LABEL}] Generated TOTP for current and next window`);
+    return { success: true, code, retryCode };
+  } catch (err) {
+    console.warn(`⚠️ [${LABEL}] TOTP generation failed: ${err.message}`);
+    return { success: false };
   }
-
-  await closeGitHubIssue(issueNumber, `⏰ No code received in ${WAIT_MINUTES * 60}s. Trying next method...`);
-  return { success: false };
 }
 
 async function tryCall(page) {
   const LABEL = "CALL";
   console.log(`\n📞 [${LABEL}] Triggering voice call to registered phone number...`);
 
-  await clickOption(page, [
+  const clicked = await clickOption(page, [
     '[data-value*="Voice"]',
     '[data-bind*="OneWayVoiceMobile"]',
     '[data-value*="voice"]',
   ], LABEL);
+  if (!clicked) {
+    console.warn(`⚠️ [${LABEL}] Voice call option not available on this challenge screen`);
+    return { success: false };
+  }
   await sleep(2000);
 
   // After clicking Call, Microsoft calls your phone — you answer and press #.
@@ -159,12 +170,16 @@ async function tryText(page) {
   const LABEL = "TEXT";
   console.log(`\n📱 [${LABEL}] Sending OTP via SMS...`);
 
-  await clickOption(page, [
+  const clicked = await clickOption(page, [
     'div[data-value="OneWaySMS"]',
     '[data-bind*="OneWaySMS"]',
     'div:has-text("Text +")',
     'li:has-text("Text +")',
   ], LABEL);
+  if (!clicked) {
+    console.warn(`⚠️ [${LABEL}] SMS option not available on this challenge screen`);
+    return { success: false };
+  }
   await sleep(2000);
 
   const issueNumber = await createGitHubIssue(
@@ -188,7 +203,6 @@ async function tryText(page) {
 
 // ─── Method registry ──────────────────────────────────────────────────────────
 const MFA_METHODS = {
-  MFA_PUSH: tryMfaPush,
   MFA_CODE: tryMfaCode,
   CALL:     tryCall,
   TEXT:     tryText,
@@ -196,7 +210,7 @@ const MFA_METHODS = {
 
 // ─── MFA pipeline ─────────────────────────────────────────────────────────────
 // Iterates MFA_METHOD_ORDER, tries each in sequence.
-// Returns the OTP code string (or null for push/call), or throws if all fail.
+// Returns MFA result object ({ success, code?, retryCode? }) or throws if all fail.
 async function handleMFA(page) {
   console.log(`🔐 MFA detected. Trying: ${MFA_METHOD_ORDER.join(" → ")}`);
   await page.screenshot({ path: `mfa_screen_${Date.now()}.png` });
@@ -215,7 +229,7 @@ async function handleMFA(page) {
     const result = await methodFn(page);
 
     if (result.success) {
-      return result.code;
+      return result;
     }
 
     console.log(`↩️  [${methodName}] failed — moving to next method`);
@@ -224,4 +238,4 @@ async function handleMFA(page) {
   throw new Error(`All MFA methods exhausted (${MFA_METHOD_ORDER.join(", ")}) — no response received`);
 }
 
-module.exports = { handleMFA };
+module.exports = { handleMFA, getTotpCodes };
