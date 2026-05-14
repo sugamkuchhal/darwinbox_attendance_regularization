@@ -194,23 +194,42 @@ async function getReasonDropdownBox(page) {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const isScrollable = (el) => {
-      if (!el) return false;
-      const style = window.getComputedStyle(el);
-      const overflowY = style.overflowY || "";
-      return (overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight + 8;
+    const collectNodes = (root) => {
+      const out = [];
+      const stack = [root];
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node) continue;
+        out.push(node);
+        if (node.shadowRoot) stack.push(node.shadowRoot);
+        if (node.children && node.children.length) {
+          for (const child of node.children) stack.push(child);
+        }
+      }
+      return out;
     };
 
-    const allCandidates = [modal, ...modal.querySelectorAll("*")].filter(isScrollable);
+    const isScrollable = (el) => {
+      if (!el || typeof el.scrollHeight !== "number" || typeof el.clientHeight !== "number") return false;
+      // Some component libraries render scrollbars while reporting overflow as `visible`/empty.
+      return el.scrollHeight > el.clientHeight + 8;
+    };
+
+    const searchRoot = modal.shadowRoot || modal;
+    const allCandidates = collectNodes(searchRoot).filter(isScrollable);
     if (allCandidates.length === 0) {
-      return { ok: false, reason: "no scrollable container found in modal", scrollTrace: [] };
+      return { ok: false, reason: "no scrollable container found in modal/shadowRoot", scrollTrace: [] };
     }
 
     // Prefer right-side pane-like container: right-most visible scrollable area.
     const ranked = allCandidates
       .map((el) => ({ el, rect: el.getBoundingClientRect() }))
       .filter(({ rect }) => rect.width > 120 && rect.height > 120)
-      .sort((a, b) => b.rect.right - a.rect.right || b.rect.height - a.rect.height);
+      .sort((a, b) => {
+        const aDepth = (a.el.scrollHeight || 0) - (a.el.clientHeight || 0);
+        const bDepth = (b.el.scrollHeight || 0) - (b.el.clientHeight || 0);
+        return bDepth - aDepth || b.rect.right - a.rect.right || b.rect.height - a.rect.height;
+      });
 
     const scroller = (ranked[0] && ranked[0].el) || allCandidates[0];
     const scrollTrace = [];
@@ -229,7 +248,7 @@ async function getReasonDropdownBox(page) {
       max: Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0))
     });
 
-    const reasonRows = [...scroller.querySelectorAll("div"), ...modal.querySelectorAll("div")].filter((row) =>
+    const reasonRows = [...scroller.querySelectorAll("div"), ...searchRoot.querySelectorAll("div"), ...modal.querySelectorAll("div")].filter((row) =>
       /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim())
     );
     if (reasonRows.length === 0) return { ok: false, reason: "Reason row not found after bottom scroll", scrollTrace };
