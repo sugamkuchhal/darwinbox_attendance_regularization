@@ -36,6 +36,17 @@ function generateTotp(secret, timestampMs = Date.now(), stepSeconds = 30, digits
   return otp;
 }
 
+function getTotpCodes() {
+  const rawSecret = (DARWINBOX_TOTP_SECRET || "").trim();
+  if (!rawSecret || rawSecret === "123456") {
+    throw new Error("DARWINBOX_TOTP_SECRET is missing/placeholder");
+  }
+  return {
+    code: generateTotp(rawSecret),
+    retryCode: generateTotp(rawSecret, Date.now() + 30_000),
+  };
+}
+
 // ─── Shared MFA helpers ───────────────────────────────────────────────────────
 
 // Click an element trying multiple selectors, return true if any succeeded.
@@ -108,17 +119,10 @@ async function tryMfaCode(page) {
   }
   await sleep(2000);
 
-  const rawSecret = (DARWINBOX_TOTP_SECRET || "").trim();
-  if (!rawSecret || rawSecret === "123456") {
-    console.warn(`⚠️ [${LABEL}] DARWINBOX_TOTP_SECRET is missing/placeholder; cannot generate TOTP`);
-    return { success: false };
-  }
-
   try {
-    const codeNow = generateTotp(rawSecret);
-    const codeNext = generateTotp(rawSecret, Date.now() + 30_000);
+    const { code, retryCode } = getTotpCodes();
     console.log(`✅ [${LABEL}] Generated TOTP for current and next window`);
-    return { success: true, code: codeNow, retryCode: codeNext };
+    return { success: true, code, retryCode };
   } catch (err) {
     console.warn(`⚠️ [${LABEL}] TOTP generation failed: ${err.message}`);
     return { success: false };
@@ -234,4 +238,4 @@ async function handleMFA(page) {
   throw new Error(`All MFA methods exhausted (${MFA_METHOD_ORDER.join(", ")}) — no response received`);
 }
 
-module.exports = { handleMFA };
+module.exports = { handleMFA, getTotpCodes };
