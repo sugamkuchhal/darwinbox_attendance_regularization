@@ -204,15 +204,40 @@ async function selectReason(page) {
   const box = await getReasonDropdownBox(page);
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
-  // Open reason dropdown by clicking its center.
+  // Step 1: open reason dropdown by clicking its center.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await sleep(400);
 
-  // Select by visible text instead of coordinate offsets.
-  // This avoids failures when the options render in a floating/portal/shadow container.
-  const option = page.getByText("Forgot To Punch", { exact: true }).first();
-  await option.waitFor({ state: "visible", timeout: 4000 });
-  await option.click({ timeout: 4000 });
-  await sleep(500);
+  // Step 2: deterministic diagnostics for visible "Forgot To Punch" candidates.
+  const candidates = await page.evaluate(() => {
+    const text = "Forgot To Punch";
+    const nodes = [...document.querySelectorAll("body *")].filter((el) => {
+      const t = (el.textContent || "").trim();
+      if (t !== text) return false;
+      const r = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    }).map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, tag: el.tagName, className: el.className || "" };
+    });
+    return nodes;
+  });
+  console.log(`   🧭 Reason option visible candidates: ${candidates.length}`);
+  candidates.slice(0, 3).forEach((c, i) => console.log(`      [${i}] ${c.tag} (${Math.round(c.x)},${Math.round(c.y)}) ${Math.round(c.width)}x${Math.round(c.height)}`));
+
+  // Step 3: click deterministic target if visible candidate exists.
+  if (candidates.length > 0) {
+    const target = candidates[0];
+    await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+    await sleep(400);
+  } else {
+    await page.screenshot({ path: "reason_option_not_visible.png" });
+    throw new Error("Reason option 'Forgot To Punch' not visible after opening dropdown");
+  }
+
+  // Step 4: verify via confirmed shadow DOM chain.
+  await sleep(300);
 
   // Verify via confirmed shadow DOM chain
   const selected = await page.evaluate(() => {
@@ -228,6 +253,7 @@ async function selectReason(page) {
 
   console.log(`   🔍 Reason selected: "${selected}"`);
   if (selected === "Select Reason" || selected.startsWith("error")) {
+    await page.screenshot({ path: "reason_selection_verification_failed.png" });
     throw new Error(`Reason not selected — shows "${selected}"`);
   }
 }
