@@ -1,6 +1,11 @@
 const { DARWINBOX_URL, EMPLOYEE_ID } = require("./config");
 const { sleep } = require("./utils");
 
+async function takeStepScreenshot(page, path, note = "") {
+  await page.screenshot({ path });
+  console.log(`   📸 Screenshot saved: ${path}${note ? ` — ${note}` : ""}`);
+}
+
 // ─── Page navigation ──────────────────────────────────────────────────────────
 
 async function activateListView(page) {
@@ -228,22 +233,38 @@ async function getReasonDropdownBox(page) {
 }
 
 async function selectReason(page) {
-  await page.screenshot({ path: "step_1_modal_open.png" });
-  const box = await getReasonDropdownBox(page);
+  await takeStepScreenshot(page, "step_1_modal_open.png", "modal opened");
+  let box;
+  try {
+    box = await getReasonDropdownBox(page);
+  } catch (err) {
+    await takeStepScreenshot(page, "step_2_scrolled_bottom_failed.png", "reason lookup failed");
+    throw err;
+  }
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
-  await page.screenshot({ path: "step_2_scrolled_bottom.png" });
+  await takeStepScreenshot(page, "step_2_scrolled_bottom.png", "bottom scroll + reason located");
 
   // Step 1: open reason dropdown by clicking its center.
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(400);
-  await page.screenshot({ path: "step_3_reason_visible.png" });
+  try {
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await sleep(400);
+    await takeStepScreenshot(page, "step_3_reason_visible.png", "reason control clicked");
+  } catch (err) {
+    await takeStepScreenshot(page, "step_3_reason_visible_failed.png", "reason control click failed");
+    throw err;
+  }
 
   // Close date picker if accidentally opened by prior focus state.
-  try { await page.keyboard.press("Escape"); } catch (_) {}
-  await sleep(100);
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(300);
-  await page.screenshot({ path: "step_4_reason_opened.png" });
+  try {
+    try { await page.keyboard.press("Escape"); } catch (_) {}
+    await sleep(100);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await sleep(300);
+    await takeStepScreenshot(page, "step_4_reason_opened.png", "reason dropdown reopened");
+  } catch (err) {
+    await takeStepScreenshot(page, "step_4_reason_opened_failed.png", "reason dropdown reopen failed");
+    throw err;
+  }
 
   // Phase B: open-state gate — verify popup/listbox-like content appears.
   const openState = await page.evaluate(() => {
@@ -291,16 +312,21 @@ async function selectReason(page) {
   console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
   optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
   if (optionDiagnostics.length === 0) {
-    await page.screenshot({ path: "reason_open_state_no_options.png" });
+    await takeStepScreenshot(page, "reason_open_state_no_options.png", "no options rendered");
     throw new Error("Reason dropdown open-state gate failed: no options rendered");
   }
 
   // Step 2: strict option selection from visible list.
-  const option = page.getByText("Forgot To Punch", { exact: true }).first();
-  await option.waitFor({ state: "visible", timeout: 4000 });
-  await option.click({ timeout: 4000 });
-  await sleep(400);
-  await page.screenshot({ path: "step_5_option_clicked.png" });
+  try {
+    const option = page.getByText("Forgot To Punch", { exact: true }).first();
+    await option.waitFor({ state: "visible", timeout: 4000 });
+    await option.click({ timeout: 4000 });
+    await sleep(400);
+    await takeStepScreenshot(page, "step_5_option_clicked.png", "forgot to punch clicked");
+  } catch (err) {
+    await takeStepScreenshot(page, "step_5_option_clicked_failed.png", "forgot to punch click failed");
+    throw err;
+  }
 
   // Step 4: verify via confirmed shadow DOM chain.
   await sleep(300);
@@ -318,23 +344,30 @@ async function selectReason(page) {
   });
 
   console.log(`   🔍 Reason selected: "${selected}"`);
-  await page.screenshot({ path: "step_6_reason_selected.png" });
+  await takeStepScreenshot(page, "step_6_reason_selected.png", `selection value=${selected}`);
   if (selected === "Select Reason" || selected.startsWith("error")) {
-    await page.screenshot({ path: "reason_selection_verification_failed.png" });
+    await takeStepScreenshot(page, "reason_selection_verification_failed.png", "selection verification failed");
+    await takeStepScreenshot(page, "step_6_reason_selected_failed.png", `bad selection value=${selected}`);
     throw new Error(`Reason not selected — shows "${selected}"`);
   }
 }
 
 async function clickSubmit(page) {
   // Submit is the last dbx-ds-button in the modal footer shadow root
-  const box = await page.evaluate(() => {
-    const btns = document.querySelector("dbx-ds-modal").shadowRoot.querySelectorAll(".footer dbx-ds-button");
-    const r    = btns[btns.length - 1].getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
-  });
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(3000);
-  console.log(`   ✅ Submitted`);
+  try {
+    const box = await page.evaluate(() => {
+      const btns = document.querySelector("dbx-ds-modal").shadowRoot.querySelectorAll(".footer dbx-ds-button");
+      const r    = btns[btns.length - 1].getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height };
+    });
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await sleep(3000);
+    await takeStepScreenshot(page, "step_7_submitted.png", "submitted");
+    console.log(`   ✅ Submitted`);
+  } catch (err) {
+    await takeStepScreenshot(page, "step_7_submitted_failed.png", "submit failed");
+    throw err;
+  }
 }
 
 // ─── Per-date orchestration (with retry) ─────────────────────────────────────
