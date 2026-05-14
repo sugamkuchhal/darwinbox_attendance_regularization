@@ -110,8 +110,10 @@ async function tryMfaCode(page) {
   const clicked = await clickOption(page, [
     'div[data-value="PhoneAppOTP"]',
     '[data-bind*="PhoneAppOTP"]',
+    'button:has-text("Use a verification code")',
     'div:has-text("Use a verification code")',
     'li:has-text("verification code")',
+    'text=Use a verification code',
   ], LABEL);
   if (!clicked) {
     console.warn(`⚠️ [${LABEL}] Verification code option not available on this challenge screen`);
@@ -137,6 +139,10 @@ async function tryCall(page) {
     '[data-value*="Voice"]',
     '[data-bind*="OneWayVoiceMobile"]',
     '[data-value*="voice"]',
+    'button:has-text("Call +")',
+    'div:has-text("Call +")',
+    'li:has-text("Call +")',
+    'text=Call +',
   ], LABEL);
   if (!clicked) {
     console.warn(`⚠️ [${LABEL}] Voice call option not available on this challenge screen`);
@@ -173,8 +179,10 @@ async function tryText(page) {
   const clicked = await clickOption(page, [
     'div[data-value="OneWaySMS"]',
     '[data-bind*="OneWaySMS"]',
+    'button:has-text("Text +")',
     'div:has-text("Text +")',
     'li:has-text("Text +")',
+    'text=Text +',
   ], LABEL);
   if (!clicked) {
     console.warn(`⚠️ [${LABEL}] SMS option not available on this challenge screen`);
