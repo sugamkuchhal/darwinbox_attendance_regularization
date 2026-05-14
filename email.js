@@ -64,8 +64,12 @@ async function sendRegularizationEmail(summary) {
     `Darwinbox Automation`
   ].join("\n");
 
-  await transporter.sendMail({ from, to: recipient, subject, text });
-  console.log(`📧 Summary email sent to ${recipient}`);
+  try {
+    await transporter.sendMail({ from, to: recipient, subject, text });
+    console.log(`📧 Summary email sent to ${recipient}`);
+  } catch (err) {
+    console.log(`⚠️ Email send failed (non-fatal): ${err.message}`);
+  }
 }
 
 module.exports = { sendRegularizationEmail };
