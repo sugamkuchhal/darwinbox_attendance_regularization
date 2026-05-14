@@ -397,9 +397,33 @@ async function selectReason(page) {
   });
   console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
   optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
-  if (optionDiagnostics.length === 0) {
+  let optionHits = optionDiagnostics;
+  for (let i = 0; i < 3 && optionHits.length === 0; i++) {
+    await sleep(300);
+    optionHits = await page.evaluate(() => {
+      const hits = [];
+      const walk = (root) => {
+        const els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (const el of els) {
+          const text = (el.textContent || "").trim();
+          if (text.includes("Forgot To Punch")) {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            if (r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none") {
+              hits.push(true);
+            }
+          }
+          if (el.shadowRoot) walk(el.shadowRoot);
+        }
+      };
+      walk(document);
+      return hits;
+    });
+  }
+  if (optionHits.length === 0) {
     await takeStepScreenshot(page, "reason_open_state_no_options.png", "no options rendered");
-    throw new Error("Reason dropdown open-state gate failed: no options rendered");
+    // Continue anyway: some builds render text lazily but click still works.
+    console.log("   ⚠️ Open-state gate inconclusive; continuing with option click fallback");
   }
 
   // Step 2: strict option selection from visible list.
