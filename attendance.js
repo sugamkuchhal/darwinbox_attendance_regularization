@@ -194,30 +194,106 @@ async function getReasonDropdownBox(page) {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const scroller = modal.querySelector(".body") || modal;
+    const collectNodes = (root) => {
+      const out = [];
+      const stack = [root];
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node) continue;
+        out.push(node);
+        if (node.shadowRoot) stack.push(node.shadowRoot);
+        if (node.children && node.children.length) {
+          for (const child of node.children) stack.push(child);
+        }
+      }
+      return out;
+    };
+
+    const isScrollable = (el) => {
+      if (!el || typeof el.scrollHeight !== "number" || typeof el.clientHeight !== "number") return false;
+      // Some component libraries render scrollbars while reporting overflow as `visible`/empty.
+      return el.scrollHeight > el.clientHeight + 8;
+    };
+
+    const searchRoot = modal.shadowRoot || modal;
+    const allCandidates = collectNodes(searchRoot).filter(isScrollable);
+    if (allCandidates.length === 0) {
+      return { ok: false, reason: "no scrollable container found in modal/shadowRoot", scrollTrace: [] };
+    }
+
+    // Prefer right-side pane-like container: right-most visible scrollable area.
+    const ranked = allCandidates
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.width > 120 && rect.height > 120)
+      .sort((a, b) => {
+        const aDepth = (a.el.scrollHeight || 0) - (a.el.clientHeight || 0);
+        const bDepth = (b.el.scrollHeight || 0) - (b.el.clientHeight || 0);
+        return bDepth - aDepth || b.rect.right - a.rect.right || b.rect.height - a.rect.height;
+      });
+
+    const scroller = (ranked[0] && ranked[0].el) || allCandidates[0];
     const scrollTrace = [];
-    for (let step = 0; step < 20; step++) {
+    for (let step = 0; step < 30; step++) {
       const before = scroller.scrollTop || 0;
       scroller.scrollTop = before + 220;
       const after = scroller.scrollTop || 0;
       scrollTrace.push({ step, before, after });
-      if (after === before) break;
+      if (after === before && step > 0) break;
     }
     scroller.scrollTop = scroller.scrollHeight;
+    scrollTrace.push({
+      step: "force-bottom",
+      before: scroller.scrollTop || 0,
+      after: scroller.scrollTop || 0,
+      max: Math.max(0, (scroller.scrollHeight || 0) - (scroller.clientHeight || 0))
+    });
 
-    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim()));
-    if (reasonRows.length === 0) return { ok: false, reason: "Reason row not found after bottom scroll", scrollTrace };
+    const allDropdowns = [...searchRoot.querySelectorAll("dbx-ds-dropdown"), ...modal.querySelectorAll("dbx-ds-dropdown")];
 
-    const reasonRow = reasonRows[0];
-    const reason = reasonRow.querySelector("dbx-ds-dropdown") || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
-    if (!reason) return { ok: false, reason: "Reason dropdown not found inside Reason row", scrollTrace };
+    // First-choice: dropdown that already contains "Select Reason" placeholder/text.
+    let reason = allDropdowns.find((d) => /select\s*reason/i.test((d.textContent || "").replace(/\s+/g, " ").trim()));
+
+    // Fallback: find any element containing "Reason" label and locate closest dropdown.
+    let reasonRow = null;
+    if (!reason) {
+      const reasonAnchors = [...searchRoot.querySelectorAll("*"), ...modal.querySelectorAll("*")].filter((el) =>
+        /\breason\b/i.test((el.textContent || "").replace(/\s+/g, " ").trim())
+      );
+      for (const anchor of reasonAnchors) {
+        const host = anchor.closest("div, label, dbx-ds-form-item, dbx-ds-field, dbx-form-field") || anchor.parentElement;
+        reason = host?.querySelector?.("dbx-ds-dropdown") || host?.parentElement?.querySelector?.("dbx-ds-dropdown");
+        if (reason) {
+          reasonRow = host;
+          break;
+        }
+      }
+    }
+
+    // Final fallback: pick dropdown closest to the first visible "Reason" anchor.
+    if (!reason) {
+      const reasonAnchor = [...searchRoot.querySelectorAll("*"), ...modal.querySelectorAll("*")]
+        .find((el) => /\breason\b/i.test((el.textContent || "").replace(/\s+/g, " ").trim()));
+      if (reasonAnchor && allDropdowns.length) {
+        const a = reasonAnchor.getBoundingClientRect();
+        reason = allDropdowns
+          .map((d) => ({ d, r: d.getBoundingClientRect() }))
+          .sort((x, y) => {
+            const dx = Math.abs((x.r.y + x.r.height / 2) - (a.y + a.height / 2));
+            const dy = Math.abs((y.r.y + y.r.height / 2) - (a.y + a.height / 2));
+            return dx - dy;
+          })[0]?.d || null;
+        reasonRow = reasonAnchor;
+      }
+    }
+
+    if (!reason) return { ok: false, reason: "Reason dropdown not found after bottom scroll", scrollTrace };
     reason.scrollIntoView({ block: "center" });
     const r = reason.getBoundingClientRect();
-    const reasonRowRect = reasonRow.getBoundingClientRect();
+    const rr = reasonRow?.getBoundingClientRect?.() || r;
     return {
       ok: true,
       box: { x: r.x, y: r.y, width: r.width, height: r.height },
-      reasonRowRect: { x: Math.round(reasonRowRect.x), y: Math.round(reasonRowRect.y), w: Math.round(reasonRowRect.width), h: Math.round(reasonRowRect.height) },
+      reasonRowRect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
       scrollTrace
     };
   });
