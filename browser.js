@@ -70,6 +70,17 @@ async function handleMfaIfPresent(page) {
   }
 
   async function submitCodeWithOneRetry(mfaResult) {
+    const now = Math.floor(Date.now() / 1000);
+    const secsIntoWindow = now % 30;
+    const secsToNext = 30 - secsIntoWindow;
+    console.log(`🧭 MFA debug: submitting code at ${new Date().toISOString()} (TOTP window +${secsIntoWindow}s, next in ${secsToNext}s)`);
+
+    const codeSelector = 'input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]';
+    const submitSelector = 'input[type="submit"], button[type="submit"]';
+    const codeTargets = await page.locator(codeSelector).count();
+    const submitTargets = await page.locator(submitSelector).count();
+    console.log(`🧭 MFA debug: code fields found=${codeTargets}, submit buttons found=${submitTargets}`);
+
     await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.code);
     await sleep(500);
     await page.click('input[type="submit"], button[type="submit"]');
@@ -80,6 +91,10 @@ async function handleMfaIfPresent(page) {
     if (stillOnMicrosoft && stillNeedsCode && mfaResult.retryCode) {
       console.warn("⚠️ MFA code did not pass. Waiting 30s and retrying once with next TOTP window...");
       await sleep(30000);
+      const retryNow = Math.floor(Date.now() / 1000);
+      const retryIntoWindow = retryNow % 30;
+      const retryToNext = 30 - retryIntoWindow;
+      console.log(`🧭 MFA debug: retry submit at ${new Date().toISOString()} (TOTP window +${retryIntoWindow}s, next in ${retryToNext}s)`);
       await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.retryCode);
       await sleep(500);
       await page.click('input[type="submit"], button[type="submit"]');
