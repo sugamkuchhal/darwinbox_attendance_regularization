@@ -184,33 +184,111 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Scroll reason dropdown (index 1) into view so options open downward
-  await page.evaluate(() => {
-    document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .scrollIntoView({ block: "center" });
-  });
-  await sleep(500);
+  // Strict contract: locate row whose text starts with "Reason", then get dropdown inside that row.
+  const result = await page.evaluate(() => {
+    const modal = document.querySelector("dbx-ds-modal");
+    if (!modal) return { ok: false, reason: "modal not found" };
 
-  return page.evaluate(() => {
-    const r = document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    const rows = [...modal.querySelectorAll("div")].map((row, idx) => {
+      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
+      const dd = row.querySelector("dbx-ds-dropdown");
+      const rr = row.getBoundingClientRect();
+      const dr = dd ? dd.getBoundingClientRect() : null;
+      return {
+        idx,
+        text: txt.slice(0, 80),
+        hasDropdown: !!dd,
+        rowRect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
+        dropdownRect: dr ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.width), h: Math.round(dr.height) } : null,
+      };
+    }).filter(r => r.text.length > 0);
+
+    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => {
+      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
+      return /^Reason\b/i.test(txt);
+    });
+    if (reasonRows.length === 0) {
+      return { ok: false, reason: "Reason row not found", rowMap: rows.slice(0, 80) };
+    }
+
+    const reasonRow = reasonRows[0];
+    const reason = reasonRow.querySelector("dbx-ds-dropdown")
+      || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
+    if (!reason) {
+      return { ok: false, reason: "Reason dropdown missing in reason row", rowMap: rows.slice(0, 80) };
+    }
+
+    reason.scrollIntoView({ block: "center" });
+    const r = reason.getBoundingClientRect();
+    const reasonRowRect = reasonRow.getBoundingClientRect();
+    return {
+      ok: true,
+      box: { x: r.x, y: r.y, width: r.width, height: r.height },
+      reasonRowRect: { x: Math.round(reasonRowRect.x), y: Math.round(reasonRowRect.y), w: Math.round(reasonRowRect.width), h: Math.round(reasonRowRect.height) },
+      rowMap: rows.slice(0, 80)
+    };
   });
+
+  if (!result.ok) {
+    console.log(`   🧭 Row map: ${JSON.stringify(result.rowMap || [])}`);
+    throw new Error(result.reason);
+  }
+  console.log(`   🧭 Reason row rect: ${JSON.stringify(result.reasonRowRect)}`);
+  console.log(`   🧭 Row map sample: ${JSON.stringify((result.rowMap || []).slice(0, 20))}`);
+  await sleep(500);
+  return result.box;
 }
 
 async function selectReason(page) {
   const box = await getReasonDropdownBox(page);
   console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
 
-  // Open the dropdown
+  // Step 1: open reason dropdown by clicking its center.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(800);
+  await sleep(400);
+  await page.screenshot({ path: "reason_after_open_click.png" });
 
-  // "Forgot To Punch" is first option — confirmed from screenshots, ~25px below dropdown bottom
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 25);
-  await sleep(500);
+  // Close date picker if accidentally opened by prior focus state.
+  try { await page.keyboard.press("Escape"); } catch (_) {}
+  await sleep(100);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await sleep(300);
+  await page.screenshot({ path: "reason_after_reopen_click.png" });
+
+  const optionDiagnostics = await page.evaluate(() => {
+    const hits = [];
+    const walk = (root, path) => {
+      const els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (const el of els) {
+        const text = (el.textContent || "").trim();
+        if (text.includes("Forgot To Punch")) {
+          const r = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          hits.push({
+            path,
+            tag: el.tagName,
+            text,
+            visible: r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none",
+            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
+          });
+        }
+        if (el.shadowRoot) walk(el.shadowRoot, `${path}>${el.tagName}#shadow`);
+      }
+    };
+    walk(document, "document");
+    return hits.slice(0, 20);
+  });
+  console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
+  optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
+
+  // Step 2: strict option selection from visible list.
+  const option = page.getByText("Forgot To Punch", { exact: true }).first();
+  await option.waitFor({ state: "visible", timeout: 4000 });
+  await option.click({ timeout: 4000 });
+  await sleep(400);
+
+  // Step 4: verify via confirmed shadow DOM chain.
+  await sleep(300);
 
   // Verify via confirmed shadow DOM chain
   const selected = await page.evaluate(() => {
@@ -226,6 +304,7 @@ async function selectReason(page) {
 
   console.log(`   🔍 Reason selected: "${selected}"`);
   if (selected === "Select Reason" || selected.startsWith("error")) {
+    await page.screenshot({ path: "reason_selection_verification_failed.png" });
     throw new Error(`Reason not selected — shows "${selected}"`);
   }
 }
