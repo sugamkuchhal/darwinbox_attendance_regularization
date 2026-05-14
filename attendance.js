@@ -184,20 +184,31 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Scroll reason dropdown (index 1) into view so options open downward
-  await page.evaluate(() => {
-    document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .scrollIntoView({ block: "center" });
-  });
-  await sleep(500);
+  // Deterministically find the Reason dropdown by label text, then scroll it into view.
+  const result = await page.evaluate(() => {
+    const modal = document.querySelector("dbx-ds-modal");
+    if (!modal) return { ok: false, reason: "modal not found" };
 
-  return page.evaluate(() => {
-    const r = document.querySelector("dbx-ds-modal")
-      .querySelectorAll("dbx-ds-dropdown")[1]
-      .getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    const labels = [...modal.querySelectorAll("*")].filter((el) => {
+      const text = (el.textContent || "").trim();
+      return /^Reason\b/i.test(text);
+    });
+    if (labels.length === 0) return { ok: false, reason: "Reason label not found" };
+
+    const label = labels[0];
+    const dropdown = label.closest("div")?.querySelector("dbx-ds-dropdown")
+      || label.parentElement?.querySelector("dbx-ds-dropdown")
+      || label.parentElement?.nextElementSibling?.querySelector?.("dbx-ds-dropdown");
+    if (!dropdown) return { ok: false, reason: "Reason dropdown not found near label" };
+
+    dropdown.scrollIntoView({ block: "center" });
+    const r = dropdown.getBoundingClientRect();
+    return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height } };
   });
+
+  if (!result.ok) throw new Error(result.reason);
+  await sleep(500);
+  return result.box;
 }
 
 async function selectReason(page) {
