@@ -580,6 +580,7 @@ async function regularizeAttendance(page) {
     console.log("✅ Total failed    (0): none");
   }
   await page.screenshot({ path: "regularization_result.png" });
+  return overall;
 }
 
 module.exports = { regularizeAttendance };

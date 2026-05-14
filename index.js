@@ -1,6 +1,7 @@
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
 const { regularizeAttendance } = require("./attendance");
+const { sendRegularizationEmail } = require("./email");
 
 function shouldSkipToday() {
   const now          = new Date();
@@ -29,7 +30,8 @@ async function run() {
 
   try {
     await login(page);
-    await regularizeAttendance(page);
+    const summary = await regularizeAttendance(page);
+    await sendRegularizationEmail(summary);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
     await page.screenshot({ path: "error_screenshot.png", fullPage: true }).catch(() => {});
