@@ -184,40 +184,21 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Deterministically find the Reason dropdown by label text, scrolling modal body if needed.
+  // Strict contract: Reason is the second dbx-ds-dropdown in Time Correction modal.
   const result = await page.evaluate(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const scroller = modal.querySelector(".body") || modal;
-    const maxSteps = 8;
-    for (let step = 0; step < maxSteps; step++) {
-      const labels = [...modal.querySelectorAll("*")].filter((el) => {
-        const text = (el.textContent || "").trim();
-        return /^Reason\b/i.test(text);
-      });
-      if (labels.length > 0) {
-        const label = labels[0];
-        const dropdown = label.closest("div")?.querySelector("dbx-ds-dropdown")
-          || label.parentElement?.querySelector("dbx-ds-dropdown")
-          || label.parentElement?.nextElementSibling?.querySelector?.("dbx-ds-dropdown");
-        if (!dropdown) return { ok: false, reason: "Reason dropdown not found near label" };
+    const dds = modal.querySelectorAll("dbx-ds-dropdown");
+    if (dds.length < 2) return { ok: false, reason: `expected >=2 dropdowns, found ${dds.length}` };
 
-        dropdown.scrollIntoView({ block: "center" });
-        const r = dropdown.getBoundingClientRect();
-        return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height }, step };
-      }
-
-      // Advance modal scroll to render lower fields (Reason/Message are below fold).
-      const before = scroller.scrollTop || 0;
-      scroller.scrollTop = before + 220;
-      if (scroller.scrollTop === before) break;
-    }
-    return { ok: false, reason: "Reason label not found after modal scroll scan" };
+    const reason = dds[1];
+    reason.scrollIntoView({ block: "center" });
+    const r = reason.getBoundingClientRect();
+    return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height } };
   });
 
   if (!result.ok) throw new Error(result.reason);
-  console.log(`   🧭 Reason label found after scroll step: ${result.step ?? 0}`);
   await sleep(500);
   return result.box;
 }
@@ -230,33 +211,11 @@ async function selectReason(page) {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(400);
 
-  // Step 2: deterministic diagnostics for visible "Forgot To Punch" candidates.
-  const candidates = await page.evaluate(() => {
-    const text = "Forgot To Punch";
-    const nodes = [...document.querySelectorAll("body *")].filter((el) => {
-      const t = (el.textContent || "").trim();
-      if (t !== text) return false;
-      const r = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    }).map((el) => {
-      const r = el.getBoundingClientRect();
-      return { x: r.x, y: r.y, width: r.width, height: r.height, tag: el.tagName, className: el.className || "" };
-    });
-    return nodes;
-  });
-  console.log(`   🧭 Reason option visible candidates: ${candidates.length}`);
-  candidates.slice(0, 3).forEach((c, i) => console.log(`      [${i}] ${c.tag} (${Math.round(c.x)},${Math.round(c.y)}) ${Math.round(c.width)}x${Math.round(c.height)}`));
-
-  // Step 3: click deterministic target if visible candidate exists.
-  if (candidates.length > 0) {
-    const target = candidates[0];
-    await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
-    await sleep(400);
-  } else {
-    await page.screenshot({ path: "reason_option_not_visible.png" });
-    throw new Error("Reason option 'Forgot To Punch' not visible after opening dropdown");
-  }
+  // Step 2: strict option selection from visible list.
+  const option = page.getByText("Forgot To Punch", { exact: true }).first();
+  await option.waitFor({ state: "visible", timeout: 4000 });
+  await option.click({ timeout: 4000 });
+  await sleep(400);
 
   // Step 4: verify via confirmed shadow DOM chain.
   await sleep(300);
