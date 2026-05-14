@@ -1,7 +1,7 @@
 const { chromium } = require("playwright");
 const { DARWINBOX_URL, USERNAME, PASSWORD } = require("./config");
 const { sleep } = require("./utils");
-const { handleMFA } = require("./mfa");
+const { handleMFA, getTotpCodes } = require("./mfa");
 
 // ─── Browser setup ────────────────────────────────────────────────────────────
 
@@ -69,13 +69,48 @@ async function handleMfaIfPresent(page) {
     return;
   }
 
-  const code = await handleMFA(page);
-  if (code) {
-    await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', code);
+  async function submitCodeWithOneRetry(mfaResult) {
+    await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.code);
     await sleep(500);
     await page.click('input[type="submit"], button[type="submit"]');
     await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
     await sleep(2000);
+    const stillOnMicrosoft = page.url().includes("login.microsoftonline");
+    const stillNeedsCode = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
+    if (stillOnMicrosoft && stillNeedsCode && mfaResult.retryCode) {
+      console.warn("⚠️ MFA code did not pass. Waiting 30s and retrying once with next TOTP window...");
+      await sleep(30000);
+      await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.retryCode);
+      await sleep(500);
+      await page.click('input[type="submit"], button[type="submit"]');
+      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+      await sleep(2000);
+      return !(page.url().includes("login.microsoftonline") && await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null));
+    }
+    return true;
+  }
+
+  const codeInputVisible = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
+  if (codeInputVisible) {
+    console.log("🔐 MFA code-entry screen detected first. Attempting direct TOTP flow.");
+    try {
+      const directTotp = getTotpCodes();
+      const codePassed = await submitCodeWithOneRetry(directTotp);
+      if (codePassed) {
+        console.log("✅ MFA direct TOTP flow completed");
+        return;
+      }
+      console.warn("⚠️ Direct TOTP attempts failed. Trying fallback methods from picker...");
+    } catch (err) {
+      console.warn(`⚠️ Direct TOTP unavailable: ${err.message}. Falling back to picker methods...`);
+    }
+    try { await page.click('a:has-text("Sign in another way"), a:has-text("other way"), a:has-text("different")', { timeout: 5000 }); } catch (_) {}
+    await sleep(1500);
+  }
+
+  const mfaResult = await handleMFA(page);
+  if (mfaResult?.code) {
+    await submitCodeWithOneRetry(mfaResult);
     console.log("✅ MFA code submitted");
   }
 }
