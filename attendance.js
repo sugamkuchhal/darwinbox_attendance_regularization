@@ -184,29 +184,40 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Deterministically find the Reason dropdown by label text, then scroll it into view.
+  // Deterministically find the Reason dropdown by label text, scrolling modal body if needed.
   const result = await page.evaluate(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const labels = [...modal.querySelectorAll("*")].filter((el) => {
-      const text = (el.textContent || "").trim();
-      return /^Reason\b/i.test(text);
-    });
-    if (labels.length === 0) return { ok: false, reason: "Reason label not found" };
+    const scroller = modal.querySelector(".body") || modal;
+    const maxSteps = 8;
+    for (let step = 0; step < maxSteps; step++) {
+      const labels = [...modal.querySelectorAll("*")].filter((el) => {
+        const text = (el.textContent || "").trim();
+        return /^Reason\b/i.test(text);
+      });
+      if (labels.length > 0) {
+        const label = labels[0];
+        const dropdown = label.closest("div")?.querySelector("dbx-ds-dropdown")
+          || label.parentElement?.querySelector("dbx-ds-dropdown")
+          || label.parentElement?.nextElementSibling?.querySelector?.("dbx-ds-dropdown");
+        if (!dropdown) return { ok: false, reason: "Reason dropdown not found near label" };
 
-    const label = labels[0];
-    const dropdown = label.closest("div")?.querySelector("dbx-ds-dropdown")
-      || label.parentElement?.querySelector("dbx-ds-dropdown")
-      || label.parentElement?.nextElementSibling?.querySelector?.("dbx-ds-dropdown");
-    if (!dropdown) return { ok: false, reason: "Reason dropdown not found near label" };
+        dropdown.scrollIntoView({ block: "center" });
+        const r = dropdown.getBoundingClientRect();
+        return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height }, step };
+      }
 
-    dropdown.scrollIntoView({ block: "center" });
-    const r = dropdown.getBoundingClientRect();
-    return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height } };
+      // Advance modal scroll to render lower fields (Reason/Message are below fold).
+      const before = scroller.scrollTop || 0;
+      scroller.scrollTop = before + 220;
+      if (scroller.scrollTop === before) break;
+    }
+    return { ok: false, reason: "Reason label not found after modal scroll scan" };
   });
 
   if (!result.ok) throw new Error(result.reason);
+  console.log(`   🧭 Reason label found after scroll step: ${result.step ?? 0}`);
   await sleep(500);
   return result.box;
 }
