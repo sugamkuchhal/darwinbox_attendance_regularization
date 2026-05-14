@@ -190,7 +190,7 @@ async function getReasonDropdownBox(page) {
     if (!modal) return { ok: false, reason: "modal not found" };
 
     const dds = modal.querySelectorAll("dbx-ds-dropdown");
-    if (dds.length === 0) return { ok: false, reason: "no dropdowns found in modal" };
+    if (dds.length === 0) return { ok: false, reason: "no dropdowns found in modal", dropdowns: [] };
 
     function selectedText(dd) {
       try {
@@ -204,8 +204,8 @@ async function getReasonDropdownBox(page) {
     const matches = [...dds].map((dd, idx) => ({ idx, dd, text: selectedText(dd) }))
       .filter(x => x.text === "Select Reason");
 
+    const summary = [...dds].map((dd, idx) => ({ idx, text: selectedText(dd) }));
     if (matches.length !== 1) {
-      const summary = [...dds].map((dd, idx) => ({ idx, text: selectedText(dd) }));
       return { ok: false, reason: `expected 1 Select Reason dropdown, found ${matches.length}`, summary };
     }
 
@@ -215,7 +215,10 @@ async function getReasonDropdownBox(page) {
     return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height }, idx: matches[0].idx };
   });
 
-  if (!result.ok) throw new Error(result.reason);
+  if (!result.ok) {
+    console.log(`   🧭 Dropdown summary: ${JSON.stringify(result.summary || result.dropdowns || [])}`);
+    throw new Error(result.reason);
+  }
   console.log(`   🧭 Reason dropdown index by value match: ${result.idx}`);
   await sleep(500);
   return result.box;
@@ -228,12 +231,40 @@ async function selectReason(page) {
   // Step 1: open reason dropdown by clicking its center.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(400);
+  await page.screenshot({ path: "reason_after_open_click.png" });
 
   // Close date picker if accidentally opened by prior focus state.
   try { await page.keyboard.press("Escape"); } catch (_) {}
   await sleep(100);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await sleep(300);
+  await page.screenshot({ path: "reason_after_reopen_click.png" });
+
+  const optionDiagnostics = await page.evaluate(() => {
+    const hits = [];
+    const walk = (root, path) => {
+      const els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (const el of els) {
+        const text = (el.textContent || "").trim();
+        if (text.includes("Forgot To Punch")) {
+          const r = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          hits.push({
+            path,
+            tag: el.tagName,
+            text,
+            visible: r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none",
+            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
+          });
+        }
+        if (el.shadowRoot) walk(el.shadowRoot, `${path}>${el.tagName}#shadow`);
+      }
+    };
+    walk(document, "document");
+    return hits.slice(0, 20);
+  });
+  console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
+  optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
 
   // Step 2: strict option selection from visible list.
   const option = page.getByText("Forgot To Punch", { exact: true }).first();
