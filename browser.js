@@ -69,14 +69,28 @@ async function handleMfaIfPresent(page) {
     return;
   }
 
-  const code = await handleMFA(page);
-  if (code) {
-    await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', code);
+  const mfaResult = await handleMFA(page);
+  if (mfaResult?.code) {
+    await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.code);
     await sleep(500);
     await page.click('input[type="submit"], button[type="submit"]');
     await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
     await sleep(2000);
-    console.log("✅ MFA code submitted");
+    const stillOnMicrosoft = page.url().includes("login.microsoftonline");
+    const stillNeedsCode = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
+
+    if (stillOnMicrosoft && stillNeedsCode && mfaResult.retryCode) {
+      console.warn("⚠️ MFA code did not pass. Waiting 30s and retrying once with next TOTP window...");
+      await sleep(30000);
+      await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.retryCode);
+      await sleep(500);
+      await page.click('input[type="submit"], button[type="submit"]');
+      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+      await sleep(2000);
+      console.log("✅ MFA code retry submitted");
+    } else {
+      console.log("✅ MFA code submitted");
+    }
   }
 }
 
