@@ -184,42 +184,57 @@ async function selectTimeCorrectionItem(page, btn) {
 // ─── Form filling ─────────────────────────────────────────────────────────────
 
 async function getReasonDropdownBox(page) {
-  // Strict contract: Reason dropdown is the one currently displaying "Select Reason".
+  // Strict contract: locate row whose text starts with "Reason", then get dropdown inside that row.
   const result = await page.evaluate(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
 
-    const dds = modal.querySelectorAll("dbx-ds-dropdown");
-    if (dds.length === 0) return { ok: false, reason: "no dropdowns found in modal", dropdowns: [] };
+    const rows = [...modal.querySelectorAll("div")].map((row, idx) => {
+      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
+      const dd = row.querySelector("dbx-ds-dropdown");
+      const rr = row.getBoundingClientRect();
+      const dr = dd ? dd.getBoundingClientRect() : null;
+      return {
+        idx,
+        text: txt.slice(0, 80),
+        hasDropdown: !!dd,
+        rowRect: { x: Math.round(rr.x), y: Math.round(rr.y), w: Math.round(rr.width), h: Math.round(rr.height) },
+        dropdownRect: dr ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.width), h: Math.round(dr.height) } : null,
+      };
+    }).filter(r => r.text.length > 0);
 
-    function selectedText(dd) {
-      try {
-        return dd.shadowRoot.querySelector("dbx-internal-dropdown")
-          .shadowRoot.querySelector("dbx-dropdown-head")
-          .shadowRoot.querySelector("#dbx-overflow-span span")
-          .innerText.trim();
-      } catch (_) { return null; }
+    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => {
+      const txt = (row.textContent || "").replace(/\s+/g, " ").trim();
+      return /^Reason\b/i.test(txt);
+    });
+    if (reasonRows.length === 0) {
+      return { ok: false, reason: "Reason row not found", rowMap: rows.slice(0, 80) };
     }
 
-    const matches = [...dds].map((dd, idx) => ({ idx, dd, text: selectedText(dd) }))
-      .filter(x => x.text === "Select Reason");
-
-    const summary = [...dds].map((dd, idx) => ({ idx, text: selectedText(dd) }));
-    if (matches.length !== 1) {
-      return { ok: false, reason: `expected 1 Select Reason dropdown, found ${matches.length}`, summary };
+    const reasonRow = reasonRows[0];
+    const reason = reasonRow.querySelector("dbx-ds-dropdown")
+      || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
+    if (!reason) {
+      return { ok: false, reason: "Reason dropdown missing in reason row", rowMap: rows.slice(0, 80) };
     }
 
-    const reason = matches[0].dd;
     reason.scrollIntoView({ block: "center" });
     const r = reason.getBoundingClientRect();
-    return { ok: true, box: { x: r.x, y: r.y, width: r.width, height: r.height }, idx: matches[0].idx };
+    const reasonRowRect = reasonRow.getBoundingClientRect();
+    return {
+      ok: true,
+      box: { x: r.x, y: r.y, width: r.width, height: r.height },
+      reasonRowRect: { x: Math.round(reasonRowRect.x), y: Math.round(reasonRowRect.y), w: Math.round(reasonRowRect.width), h: Math.round(reasonRowRect.height) },
+      rowMap: rows.slice(0, 80)
+    };
   });
 
   if (!result.ok) {
-    console.log(`   🧭 Dropdown summary: ${JSON.stringify(result.summary || result.dropdowns || [])}`);
+    console.log(`   🧭 Row map: ${JSON.stringify(result.rowMap || [])}`);
     throw new Error(result.reason);
   }
-  console.log(`   🧭 Reason dropdown index by value match: ${result.idx}`);
+  console.log(`   🧭 Reason row rect: ${JSON.stringify(result.reasonRowRect)}`);
+  console.log(`   🧭 Row map sample: ${JSON.stringify((result.rowMap || []).slice(0, 20))}`);
   await sleep(500);
   return result.box;
 }
