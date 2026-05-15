@@ -318,7 +318,53 @@ async function getReasonDropdownBox(page) {
   return result.box;
 }
 
-async function selectReason(page) {
+
+function getReasonPriority() {
+  const raw = process.env.DARWINBOX_REASON_PRIORITY || "Forgot To Punch,Outdoor Duty,Work From Home,In / Out Swiping Mistake";
+  return raw.split(",").map(s => s.trim()).filter(Boolean);
+}
+
+async function chooseReasonOption(page, reasonChoices) {
+  for (const reason of reasonChoices) {
+    try {
+      const option = page.getByText(reason, { exact: true }).first();
+      await option.waitFor({ state: "visible", timeout: 1500 });
+      await option.click({ timeout: 2000 });
+      return reason;
+    } catch (_) {}
+  }
+
+  const picked = await page.evaluate((choices) => {
+    const hits = [];
+    const walk = (root) => {
+      const els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (const el of els) {
+        const text = (el.textContent || "").trim();
+        if (choices.includes(text)) {
+          const r = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          if (r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none") {
+            hits.push({ text, x: r.x + r.width / 2, y: r.y + r.height / 2, y0: r.y });
+          }
+        }
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(document);
+    if (!hits.length) return null;
+    hits.sort((a,b)=>a.y0-b.y0);
+    return hits[0];
+  }, reasonChoices);
+
+  if (picked) {
+    await page.mouse.click(picked.x, picked.y);
+    return picked.text;
+  }
+
+  throw new Error(`No preferred reason option visible. Tried: ${reasonChoices.join(", ")}`);
+}
+
+async function selectReason(page, forcedReason = null) {
   await takeStepScreenshot(page, "step_1_modal_open.png", "modal opened");
   let box;
   try {
@@ -426,15 +472,15 @@ async function selectReason(page) {
     console.log("   ⚠️ Open-state gate inconclusive; continuing with option click fallback");
   }
 
-  // Step 2: strict option selection from visible list.
+  // Step 2: choose first available reason from configured priority list.
+  const reasonChoices = forcedReason ? [forcedReason] : getReasonPriority();
+  let chosenReason;
   try {
-    const option = page.getByText("Forgot To Punch", { exact: true }).first();
-    await option.waitFor({ state: "visible", timeout: 4000 });
-    await option.click({ timeout: 4000 });
+    chosenReason = await chooseReasonOption(page, reasonChoices);
     await sleep(400);
-    await takeStepScreenshot(page, "step_5_option_clicked.png", "forgot to punch clicked");
+    await takeStepScreenshot(page, "step_5_option_clicked.png", `${chosenReason} clicked`);
   } catch (err) {
-    await takeStepScreenshot(page, "step_5_option_clicked_failed.png", "forgot to punch click failed");
+    await takeStepScreenshot(page, "step_5_option_clicked_failed.png", "reason option click failed");
     throw err;
   }
 
@@ -455,7 +501,7 @@ async function selectReason(page) {
 
   console.log(`   🔍 Reason selected: "${selected}"`);
   await takeStepScreenshot(page, "step_6_reason_selected.png", `selection value=${selected}`);
-  if (selected === "Select Reason" || selected.startsWith("error")) {
+  if (selected === "Select Reason" || selected.startsWith("error") || !reasonChoices.some(r => r.toLowerCase() === selected.toLowerCase())) {
     await takeStepScreenshot(page, "reason_selection_verification_failed.png", "selection verification failed");
     await takeStepScreenshot(page, "step_6_reason_selected_failed.png", `bad selection value=${selected}`);
     throw new Error(`Reason not selected — shows "${selected}"`);
@@ -482,47 +528,54 @@ async function clickSubmit(page) {
 
 // ─── Per-date orchestration (with retry) ─────────────────────────────────────
 
-async function attemptDate(page, date) {
+async function attemptDate(page, date, forcedReason = null) {
   const btn = await openContextMenu(page, date);
   await selectTimeCorrectionItem(page, btn);
-  await selectReason(page);
+  await selectReason(page, forcedReason);
   await clickSubmit(page);
 }
 
 async function processDate(page, date, reloadView) {
   console.log(`\n📝 Processing: ${date}`);
 
-  let succeeded = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      if (attempt > 1) {
-        console.log(`   🔄 Retry attempt ${attempt}...`);
-        await reloadView();
+  const reasons = getReasonPriority();
+  for (let rIdx = 0; rIdx < reasons.length; rIdx++) {
+    const reason = reasons[rIdx];
+    console.log(`   🧾 Trying reason (${rIdx + 1}/${reasons.length}): ${reason}`);
+
+    let submitted = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.log(`   🔄 Retry attempt ${attempt} (reason: ${reason})...`);
+          await reloadView();
+        }
+        await attemptDate(page, date, reason);
+        submitted = true;
+        break;
+      } catch (err) {
+        console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
+        await page.screenshot({ path: `error_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}_attempt${attempt}.png` });
+        try { await page.keyboard.press("Escape"); } catch (_) {}
+        await sleep(500);
       }
-      await attemptDate(page, date);
-      succeeded = true;
-      break;
-    } catch (err) {
-      console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
-      await page.screenshot({ path: `error_${date}_attempt${attempt}.png` });
-      try { await page.keyboard.press("Escape"); } catch (_) {}
-      await sleep(500);
+    }
+
+    // verify this reason attempt
+    await reloadView();
+    if (submitted) {
+      const verified = await verifySubmission(page, date);
+      if (verified) return true;
+
+      await page.screenshot({ path: `unverified_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}.png` });
+      console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
+    } else {
+      console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
     }
   }
 
-  // Reload and verify regardless of outcome
-  await reloadView();
-
-  if (succeeded) {
-    const verified = await verifySubmission(page, date);
-    if (!verified) {
-      await page.screenshot({ path: `unverified_${date}.png` });
-    }
-  } else {
-    console.warn(`   ❌ All attempts failed for ${date}`);
-  }
-
-  return succeeded;
+  console.warn(`   ❌ All reasons exhausted for ${date}`);
+  return false;
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
