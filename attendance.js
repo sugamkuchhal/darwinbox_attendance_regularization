@@ -1,5 +1,6 @@
 const { DARWINBOX_URL, EMPLOYEE_ID } = require("./config");
 const { sleep } = require("./utils");
+const { selectReason, getReasonPriority } = require("./reason");
 
 async function takeStepScreenshot(page, path, note = "") {
   await page.screenshot({ path });
@@ -186,171 +187,7 @@ async function selectTimeCorrectionItem(page, btn) {
   console.log(`   ✅ Modal ready`);
 }
 
-// ─── Form filling ─────────────────────────────────────────────────────────────
-
-async function getReasonDropdownBox(page) {
-  // Phase A: Scroll modal body to terminal bottom before locating Reason.
-  const result = await page.evaluate(() => {
-    const modal = document.querySelector("dbx-ds-modal");
-    if (!modal) return { ok: false, reason: "modal not found" };
-
-    const scroller = modal.querySelector(".body") || modal;
-    const scrollTrace = [];
-    for (let step = 0; step < 20; step++) {
-      const before = scroller.scrollTop || 0;
-      scroller.scrollTop = before + 220;
-      const after = scroller.scrollTop || 0;
-      scrollTrace.push({ step, before, after });
-      if (after === before) break;
-    }
-    scroller.scrollTop = scroller.scrollHeight;
-
-    const reasonRows = [...modal.querySelectorAll("div")].filter((row) => /^Reason\b/i.test((row.textContent || "").replace(/\s+/g, " ").trim()));
-    if (reasonRows.length === 0) return { ok: false, reason: "Reason row not found after bottom scroll", scrollTrace };
-
-    const reasonRow = reasonRows[0];
-    const reason = reasonRow.querySelector("dbx-ds-dropdown") || reasonRow.parentElement?.querySelector("dbx-ds-dropdown");
-    if (!reason) return { ok: false, reason: "Reason dropdown not found inside Reason row", scrollTrace };
-    reason.scrollIntoView({ block: "center" });
-    const r = reason.getBoundingClientRect();
-    const reasonRowRect = reasonRow.getBoundingClientRect();
-    return {
-      ok: true,
-      box: { x: r.x, y: r.y, width: r.width, height: r.height },
-      reasonRowRect: { x: Math.round(reasonRowRect.x), y: Math.round(reasonRowRect.y), w: Math.round(reasonRowRect.width), h: Math.round(reasonRowRect.height) },
-      scrollTrace
-    };
-  });
-
-  if (!result.ok) {
-    console.log(`   🧭 Bottom-scroll trace: ${JSON.stringify(result.scrollTrace || [])}`);
-    throw new Error(result.reason);
-  }
-  console.log(`   🧭 Reason row rect: ${JSON.stringify(result.reasonRowRect)}`);
-  console.log(`   🧭 Bottom-scroll trace: ${JSON.stringify((result.scrollTrace || []).slice(0, 8))}`);
-  await sleep(500);
-  return result.box;
-}
-
-async function selectReason(page) {
-  await takeStepScreenshot(page, "step_1_modal_open.png", "modal opened");
-  let box;
-  try {
-    box = await getReasonDropdownBox(page);
-  } catch (err) {
-    await takeStepScreenshot(page, "step_2_scrolled_bottom_failed.png", "reason lookup failed");
-    throw err;
-  }
-  console.log(`   🔍 Reason dropdown: ${JSON.stringify(box)}`);
-  await takeStepScreenshot(page, "step_2_scrolled_bottom.png", "bottom scroll + reason located");
-
-  // Step 1: open reason dropdown by clicking its center.
-  try {
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    await sleep(400);
-    await takeStepScreenshot(page, "step_3_reason_visible.png", "reason control clicked");
-  } catch (err) {
-    await takeStepScreenshot(page, "step_3_reason_visible_failed.png", "reason control click failed");
-    throw err;
-  }
-
-  // Close date picker if accidentally opened by prior focus state.
-  try {
-    try { await page.keyboard.press("Escape"); } catch (_) {}
-    await sleep(100);
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    await sleep(300);
-    await takeStepScreenshot(page, "step_4_reason_opened.png", "reason dropdown reopened");
-  } catch (err) {
-    await takeStepScreenshot(page, "step_4_reason_opened_failed.png", "reason dropdown reopen failed");
-    throw err;
-  }
-
-  // Phase B: open-state gate — verify popup/listbox-like content appears.
-  const openState = await page.evaluate(() => {
-    const hints = [...document.querySelectorAll("body *")].filter((el) => {
-      const txt = (el.textContent || "").trim();
-      return txt.includes("Forgot To Punch") || txt.includes("Machine Not Working") || txt.includes("Work From Home");
-    }).map((el) => {
-      const r = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      return {
-        tag: el.tagName,
-        visible: r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden",
-        rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-        text: (el.textContent || "").trim().slice(0, 80)
-      };
-    });
-    return hints.slice(0, 30);
-  });
-  console.log(`   🧭 Open-state hints count: ${openState.length}`);
-  openState.forEach((h, i) => console.log(`      [open ${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} text="${h.text}"`));
-
-  const optionDiagnostics = await page.evaluate(() => {
-    const hits = [];
-    const walk = (root, path) => {
-      const els = root.querySelectorAll ? root.querySelectorAll("*") : [];
-      for (const el of els) {
-        const text = (el.textContent || "").trim();
-        if (text.includes("Forgot To Punch")) {
-          const r = el.getBoundingClientRect();
-          const style = window.getComputedStyle(el);
-          hits.push({
-            path,
-            tag: el.tagName,
-            text,
-            visible: r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none",
-            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
-          });
-        }
-        if (el.shadowRoot) walk(el.shadowRoot, `${path}>${el.tagName}#shadow`);
-      }
-    };
-    walk(document, "document");
-    return hits.slice(0, 20);
-  });
-  console.log(`   🧭 'Forgot To Punch' diagnostic hits: ${optionDiagnostics.length}`);
-  optionDiagnostics.forEach((h, i) => console.log(`      [${i}] ${h.tag} vis=${h.visible} rect=${JSON.stringify(h.rect)} path=${h.path}`));
-  if (optionDiagnostics.length === 0) {
-    await takeStepScreenshot(page, "reason_open_state_no_options.png", "no options rendered");
-    throw new Error("Reason dropdown open-state gate failed: no options rendered");
-  }
-
-  // Step 2: strict option selection from visible list.
-  try {
-    const option = page.getByText("Forgot To Punch", { exact: true }).first();
-    await option.waitFor({ state: "visible", timeout: 4000 });
-    await option.click({ timeout: 4000 });
-    await sleep(400);
-    await takeStepScreenshot(page, "step_5_option_clicked.png", "forgot to punch clicked");
-  } catch (err) {
-    await takeStepScreenshot(page, "step_5_option_clicked_failed.png", "forgot to punch click failed");
-    throw err;
-  }
-
-  // Step 4: verify via confirmed shadow DOM chain.
-  await sleep(300);
-
-  // Verify via confirmed shadow DOM chain
-  const selected = await page.evaluate(() => {
-    try {
-      return document.querySelector("dbx-ds-modal")
-        .querySelectorAll("dbx-ds-dropdown")[1]
-        .shadowRoot.querySelector("dbx-internal-dropdown")
-        .shadowRoot.querySelector("dbx-dropdown-head")
-        .shadowRoot.querySelector("#dbx-overflow-span span")
-        .innerText.trim();
-    } catch (e) { return "error: " + e.message; }
-  });
-
-  console.log(`   🔍 Reason selected: "${selected}"`);
-  await takeStepScreenshot(page, "step_6_reason_selected.png", `selection value=${selected}`);
-  if (selected === "Select Reason" || selected.startsWith("error")) {
-    await takeStepScreenshot(page, "reason_selection_verification_failed.png", "selection verification failed");
-    await takeStepScreenshot(page, "step_6_reason_selected_failed.png", `bad selection value=${selected}`);
-    throw new Error(`Reason not selected — shows "${selected}"`);
-  }
-}
+// ─── Form filling delegated to reason.js ───────────────────────────────────────
 
 async function clickSubmit(page) {
   // Submit is the last dbx-ds-button in the modal footer shadow root
@@ -372,47 +209,54 @@ async function clickSubmit(page) {
 
 // ─── Per-date orchestration (with retry) ─────────────────────────────────────
 
-async function attemptDate(page, date) {
+async function attemptDate(page, date, forcedReason = null) {
   const btn = await openContextMenu(page, date);
   await selectTimeCorrectionItem(page, btn);
-  await selectReason(page);
+  await selectReason(page, forcedReason);
   await clickSubmit(page);
 }
 
 async function processDate(page, date, reloadView) {
   console.log(`\n📝 Processing: ${date}`);
 
-  let succeeded = false;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      if (attempt > 1) {
-        console.log(`   🔄 Retry attempt ${attempt}...`);
-        await reloadView();
+  const reasons = getReasonPriority();
+  for (let rIdx = 0; rIdx < reasons.length; rIdx++) {
+    const reason = reasons[rIdx];
+    console.log(`   🧾 Trying reason (${rIdx + 1}/${reasons.length}): ${reason}`);
+
+    let submitted = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.log(`   🔄 Retry attempt ${attempt} (reason: ${reason})...`);
+          await reloadView();
+        }
+        await attemptDate(page, date, reason);
+        submitted = true;
+        break;
+      } catch (err) {
+        console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
+        await page.screenshot({ path: `error_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}_attempt${attempt}.png` });
+        try { await page.keyboard.press("Escape"); } catch (_) {}
+        await sleep(500);
       }
-      await attemptDate(page, date);
-      succeeded = true;
-      break;
-    } catch (err) {
-      console.warn(`   ⚠️ Attempt ${attempt} failed: ${err.message}`);
-      await page.screenshot({ path: `error_${date}_attempt${attempt}.png` });
-      try { await page.keyboard.press("Escape"); } catch (_) {}
-      await sleep(500);
+    }
+
+    // verify this reason attempt
+    await reloadView();
+    if (submitted) {
+      const verified = await verifySubmission(page, date);
+      if (verified) return true;
+
+      await page.screenshot({ path: `unverified_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}.png` });
+      console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
+    } else {
+      console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
     }
   }
 
-  // Reload and verify regardless of outcome
-  await reloadView();
-
-  if (succeeded) {
-    const verified = await verifySubmission(page, date);
-    if (!verified) {
-      await page.screenshot({ path: `unverified_${date}.png` });
-    }
-  } else {
-    console.warn(`   ❌ All attempts failed for ${date}`);
-  }
-
-  return succeeded;
+  console.warn(`   ❌ All reasons exhausted for ${date}`);
+  return false;
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
@@ -470,6 +314,7 @@ async function regularizeAttendance(page) {
     console.log("✅ Total failed    (0): none");
   }
   await page.screenshot({ path: "regularization_result.png" });
+  return overall;
 }
 
 module.exports = { regularizeAttendance };
