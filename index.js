@@ -7,12 +7,15 @@ function shouldSkipToday() {
   const now          = new Date();
   const day          = now.getDay();   // 0=Sun, 6=Sat
   const date         = now.getDate();  // 1–31
+  if (day == 0) {
+    console.log(`⏭️  Logging — today is Sunday (holiday)`);
+return false;         // not Sunday — never skip
   if (day !== 6) return false;         // not Saturday — never skip
 
   // Which Saturday of the month?
   const nthSaturday = Math.ceil(date / 7);
   if (nthSaturday === 2 || nthSaturday === 3) {
-    console.log(`⏭️  Skipping — today is the ${nthSaturday === 2 ? "2nd" : "3rd"} Saturday (holiday)`);
+    console.log(`⏭️  Logging — today is the ${nthSaturday === 2 ? "2nd" : "3rd"} Saturday (holiday)`);
     return false;
   }
   return false;
