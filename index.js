@@ -13,7 +13,7 @@ function shouldSkipToday() {
   const nthSaturday = Math.ceil(date / 7);
   if (nthSaturday === 2 || nthSaturday === 3) {
     console.log(`⏭️  Skipping — today is the ${nthSaturday === 2 ? "2nd" : "3rd"} Saturday (holiday)`);
-    return true;
+    return false;
   }
   return false;
 }
