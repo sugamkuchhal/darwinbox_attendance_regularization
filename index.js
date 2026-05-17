@@ -10,6 +10,7 @@ function shouldSkipToday() {
   if (day == 0) {
     console.log(`⏭️  Logging — today is Sunday (holiday)`);
 return false;         // not Sunday — never skip
+  }
   if (day !== 6) return false;         // not Saturday — never skip
 
   // Which Saturday of the month?
