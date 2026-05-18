@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs Mon–Sat at 10:00 AM IST (4:30 AM UTC)
     # 2nd and 3rd Saturday skipped in code (index.js)
-    - cron: "30 4 * * 1-6"
+    - cron: "30 4 * * *"
 
   workflow_dispatch: # Manual trigger from GitHub UI
 
@@ -42,6 +42,13 @@ jobs:
           DARWINBOX_TOTP_SECRET: ${{ secrets.DARWINBOX_TOTP_SECRET }}
           GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}      # auto-provided, no setup needed
           GITHUB_REPOSITORY:  ${{ github.repository }}         # auto-provided, no setup needed
+          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE:       ${{ secrets.SMTP_SECURE }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:         ${{ secrets.SMTP_FROM }}
+          REPORT_EMAIL_TO:   ${{ secrets.REPORT_EMAIL_TO }}
         run: node index.js
 
       - name: 📸 Upload screenshots (for debugging)
