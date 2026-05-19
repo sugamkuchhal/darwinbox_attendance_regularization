@@ -2,20 +2,47 @@ const { sleep } = require("./utils");
 const { selectReason, getReasonPriority } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
 const { findAbsentDates, verifySubmission } = require("./attendance-scan");
-const { takeStepScreenshot, openContextMenu, selectTimeCorrectionItem, clickSubmit } = require("./attendance-actions");
+const { openContextMenu, selectTimeCorrectionItem, clickSubmit } = require("./attendance-actions");
 const { ATTEMPTS_PER_REASON, UI_SLEEP_RETRY_MS } = require("./attendance-constants");
-
-// ─── Context menu ─────────────────────────────────────────────────────────────
-
-// ─── Form filling delegated to reason.js ───────────────────────────────────────
-
-// ─── Per-date orchestration (with retry) ─────────────────────────────────────
 
 async function attemptDate(page, date, forcedReason = null) {
   const btn = await openContextMenu(page, date);
   await selectTimeCorrectionItem(page, btn);
   await selectReason(page, forcedReason);
   await clickSubmit(page);
+}
+
+async function attemptReasonWithRetries(page, date, reason, reloadView) {
+  for (let attempt = 1; attempt <= ATTEMPTS_PER_REASON; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`   🔄 Retry attempt ${attempt} (reason: ${reason})...`);
+        await reloadView();
+      }
+      await attemptDate(page, date, reason);
+      return true;
+    } catch (err) {
+      console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
+      await page.screenshot({ path: `error_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}_attempt${attempt}.png` });
+      try { await page.keyboard.press("Escape"); } catch (_) {}
+      await sleep(UI_SLEEP_RETRY_MS);
+    }
+  }
+  return false;
+}
+
+async function verifyReasonAttempt(page, date, reason, submitted) {
+  if (!submitted) {
+    console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
+    return false;
+  }
+
+  const verified = await verifySubmission(page, date);
+  if (verified) return true;
+
+  await page.screenshot({ path: `unverified_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}.png` });
+  console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
+  return false;
 }
 
 async function processDate(page, date, reloadView) {
@@ -26,42 +53,15 @@ async function processDate(page, date, reloadView) {
     const reason = reasons[rIdx];
     console.log(`   🧾 Trying reason (${rIdx + 1}/${reasons.length}): ${reason}`);
 
-    let submitted = false;
-    for (let attempt = 1; attempt <= ATTEMPTS_PER_REASON; attempt++) {
-      try {
-        if (attempt > 1) {
-          console.log(`   🔄 Retry attempt ${attempt} (reason: ${reason})...`);
-          await reloadView();
-        }
-        await attemptDate(page, date, reason);
-        submitted = true;
-        break;
-      } catch (err) {
-        console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
-        await page.screenshot({ path: `error_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}_attempt${attempt}.png` });
-        try { await page.keyboard.press("Escape"); } catch (_) {}
-        await sleep(UI_SLEEP_RETRY_MS);
-      }
-    }
-
-    // verify this reason attempt
+    const submitted = await attemptReasonWithRetries(page, date, reason, reloadView);
     await reloadView();
-    if (submitted) {
-      const verified = await verifySubmission(page, date);
-      if (verified) return true;
-
-      await page.screenshot({ path: `unverified_${date}_${reason.replace(/[^a-z0-9]+/gi, "_")}.png` });
-      console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
-    } else {
-      console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
-    }
+    const done = await verifyReasonAttempt(page, date, reason, submitted);
+    if (done) return true;
   }
 
   console.warn(`   ❌ All reasons exhausted for ${date}`);
   return false;
 }
-
-// ─── Main entry point ─────────────────────────────────────────────────────────
 
 async function regularizeAttendance(page) {
   const dayOfMonth = new Date().getDate();
@@ -79,7 +79,7 @@ async function regularizeAttendance(page) {
     console.log("=".repeat(60));
 
     await reloadForContext();
-  await page.screenshot({ path: "list_view.png" });
+    await page.screenshot({ path: "list_view.png" });
 
     const absentDates = await findAbsentDates(page);
 
