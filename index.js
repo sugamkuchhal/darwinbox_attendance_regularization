@@ -1,6 +1,6 @@
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
-const { regularizeAttendance } = require("./attendance");
+const { regularizeAttendance } = require("./attendance-orchestrator");
 const { sendRegularizationEmail } = require("./email");
 
 function shouldSkipToday() {
