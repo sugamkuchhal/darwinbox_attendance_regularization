@@ -1,3 +1,4 @@
+// Encapsulates direct modal/table UI interactions on attendance page.
 const { sleep } = require("./utils");
 const { findContextMenuIndex } = require("./attendance-scan");
 const { MODAL_OPEN_TIMEOUT_MS, UI_SLEEP_SHORT_MS, UI_SLEEP_MENU_MS, UI_SLEEP_SUBMIT_MS } = require("./attendance-constants");

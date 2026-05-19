@@ -1,3 +1,4 @@
+// Handles attendance page loading and month navigation helpers.
 const { DARWINBOX_URL, EMPLOYEE_ID } = require("./config");
 const { sleep } = require("./utils");
 

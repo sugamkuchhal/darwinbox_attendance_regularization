@@ -1,3 +1,4 @@
+// Sends end-of-run summary email when SMTP config is available.
 const nodemailer = require("nodemailer");
 
 function isEmail(v) {

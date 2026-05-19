@@ -1,3 +1,4 @@
+// Scans table rows and verifies post-submit status badges.
 async function getTodayStr(page) {
   return page.evaluate(() => {
     const d  = new Date();

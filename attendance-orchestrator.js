@@ -1,3 +1,4 @@
+// Coordinates month/date processing and reason-based retries.
 const { sleep } = require("./utils");
 const { selectReason, getReasonPriority } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
@@ -58,12 +59,14 @@ async function runMonthContext(page, monthContext) {
   logMonthSummary(monthContext, results);
   return results;
 }
+// Executes one end-to-end submit attempt for a specific date/reason.
 async function attemptDate(page, date, forcedReason = null) {
   const btn = await openContextMenu(page, date);
   await selectTimeCorrectionItem(page, btn);
   await selectReason(page, forcedReason);
   await clickSubmit(page);
 }
+// Retries a single reason path before moving to next reason.
 async function attemptReasonWithRetries(page, date, reason, reloadView) {
   for (let attempt = 1; attempt <= ATTEMPTS_PER_REASON; attempt++) {
     try {
@@ -82,6 +85,7 @@ async function attemptReasonWithRetries(page, date, reason, reloadView) {
   }
   return false;
 }
+// Verifies list-view outcome; failure advances to next reason.
 async function verifyReasonAttempt(page, date, reason, submitted) {
   if (!submitted) {
     console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
@@ -107,6 +111,7 @@ async function processDate(page, date, reloadView) {
   console.warn(`   ❌ All reasons exhausted for ${date}`);
   return false;
 }
+// Public entrypoint for attendance regularization.
 async function regularizeAttendance(page) {
   const monthContexts = buildMonthContexts(new Date());
   const overall = { succeeded: [], failed: [] };

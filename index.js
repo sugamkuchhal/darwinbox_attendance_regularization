@@ -1,3 +1,4 @@
+// Bootstraps runtime: validates env, logs in, runs flow, sends summary.
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
 const { regularizeAttendance } = require("./attendance-orchestrator");

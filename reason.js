@@ -1,3 +1,4 @@
+// Handles reason dropdown discovery and option selection in modal.
 const { sleep } = require("./utils");
 
 async function takeStepScreenshot(page, path, note = "") {
