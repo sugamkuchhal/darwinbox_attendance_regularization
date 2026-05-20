@@ -12,8 +12,34 @@ async function getReasonDropdownBox(page) {
   return page.evaluate(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return { ok: false, reason: "modal not found" };
+
     const dropdowns = [...modal.querySelectorAll("dbx-ds-dropdown")];
-    const reason = dropdowns[1] || dropdowns.find((d) => /select\s*reason/i.test((d.textContent || "").trim()));
+
+    // Primary strategy (existing): index-based or placeholder-text match.
+    let reason = dropdowns[1] || dropdowns.find((d) => /select\s*reason/i.test((d.textContent || "").trim()));
+
+    // Fallback strategy (additive): anchor to visible "Reason" text and pick nearest dropdown.
+    if (!reason) {
+      const anchors = [...modal.querySelectorAll("*")].filter((el) => /\breason\b/i.test((el.textContent || "").trim()));
+      const anchor = anchors.find((el) => {
+        const r = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      });
+
+      if (anchor && dropdowns.length) {
+        const a = anchor.getBoundingClientRect();
+        reason = dropdowns
+          .map((d) => ({ d, r: d.getBoundingClientRect() }))
+          .filter(({ r }) => r.width > 0 && r.height > 0)
+          .sort((x, y) => {
+            const dx = Math.abs((x.r.y + x.r.height / 2) - (a.y + a.height / 2));
+            const dy = Math.abs((y.r.y + y.r.height / 2) - (a.y + a.height / 2));
+            return dx - dy;
+          })[0]?.d || null;
+      }
+    }
+
     if (!reason) return { ok: false, reason: "Reason dropdown not found" };
     reason.scrollIntoView({ block: "center" });
     const r = reason.getBoundingClientRect();
