@@ -2,11 +2,7 @@
 const { sleep } = require("./utils");
 const { findContextMenuIndex } = require("./attendance-scan");
 const { MODAL_OPEN_TIMEOUT_MS, UI_SLEEP_SHORT_MS, UI_SLEEP_MENU_MS, UI_SLEEP_SUBMIT_MS } = require("./attendance-constants");
-
-async function takeStepScreenshot(page, path, note = "") {
-  await page.screenshot({ path });
-  console.log(`   📸 Screenshot saved: ${path}${note ? ` — ${note}` : ""}`);
-}
+const { takeStepScreenshot } = require("./reporting");
 
 async function openContextMenu(page, date) {
   const idx = await findContextMenuIndex(page, date);
@@ -49,4 +45,4 @@ async function clickSubmit(page) {
   }
 }
 
-module.exports = { takeStepScreenshot, openContextMenu, selectTimeCorrectionItem, clickSubmit };
+module.exports = { openContextMenu, selectTimeCorrectionItem, clickSubmit };

@@ -1,13 +1,10 @@
 // Handles reason dropdown discovery and option selection in modal.
 const { sleep } = require("./utils");
-
-async function takeStepScreenshot(page, path, note = "") {
-  await page.screenshot({ path });
-  console.log(`   📸 Screenshot saved: ${path}${note ? ` — ${note}` : ""}`);
-}
+const { takeStepScreenshot } = require("./reporting");
+const { DEFAULT_REASON_PRIORITY, REASON_OPTION_WAIT_MS, REASON_OPTION_CLICK_MS, REASON_UI_SLEEP_MS } = require("./attendance-constants");
 
 function getReasonPriority() {
-  const raw = process.env.DARWINBOX_REASON_PRIORITY || "Forgot To Punch,Outdoor Duty,Work From Home,In / Out Swiping Mistake";
+  const raw = process.env.DARWINBOX_REASON_PRIORITY || DEFAULT_REASON_PRIORITY;
   return raw.split(",").map(s => s.trim()).filter(Boolean);
 }
 
@@ -28,8 +25,8 @@ async function chooseReasonOption(page, reasonChoices) {
   for (const reason of reasonChoices) {
     try {
       const option = page.getByText(reason, { exact: true }).first();
-      await option.waitFor({ state: "visible", timeout: 1500 });
-      await option.click({ timeout: 2000 });
+      await option.waitFor({ state: "visible", timeout: REASON_OPTION_WAIT_MS });
+      await option.click({ timeout: REASON_OPTION_CLICK_MS });
       return reason;
     } catch (_) {}
   }
@@ -45,14 +42,14 @@ async function selectReason(page, forcedReason = null) {
   }
   const box = result.box;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(300);
+  await sleep(REASON_UI_SLEEP_MS);
   await page.keyboard.press("Escape").catch(() => {});
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await sleep(300);
+  await sleep(REASON_UI_SLEEP_MS);
 
   const reasonChoices = forcedReason ? [forcedReason] : getReasonPriority();
   const chosenReason = await chooseReasonOption(page, reasonChoices);
-  await sleep(300);
+  await sleep(REASON_UI_SLEEP_MS);
   await takeStepScreenshot(page, "step_5_option_clicked.png", `${chosenReason} clicked`);
 }
 
