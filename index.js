@@ -1,18 +1,24 @@
+// Bootstraps runtime: validates env, logs in, runs flow, sends summary.
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
-const { regularizeAttendance } = require("./attendance");
+const { regularizeAttendance } = require("./attendance-orchestrator");
+const { sendRegularizationEmail } = require("./email");
 
-function shouldSkipToday() {
+function logHolidayContext() {
   const now          = new Date();
   const day          = now.getDay();   // 0=Sun, 6=Sat
   const date         = now.getDate();  // 1–31
+  if (day == 0) {
+    console.log(`⏭️  Logging — today is Sunday (holiday)`);
+    return false;         // not Sunday — never skip
+  }
   if (day !== 6) return false;         // not Saturday — never skip
 
   // Which Saturday of the month?
   const nthSaturday = Math.ceil(date / 7);
   if (nthSaturday === 2 || nthSaturday === 3) {
-    console.log(`⏭️  Skipping — today is the ${nthSaturday === 2 ? "2nd" : "3rd"} Saturday (holiday)`);
-    return true;
+    console.log(`⏭️  Logging — today is the ${nthSaturday === 2 ? "2nd" : "3rd"} Saturday (holiday)`);
+    return false;
   }
   return false;
 }
@@ -23,13 +29,14 @@ async function run() {
     process.exit(1);
   }
 
-  if (shouldSkipToday()) process.exit(0);
+  logHolidayContext();
 
   const { browser, page } = await launchBrowser();
 
   try {
     await login(page);
-    await regularizeAttendance(page);
+    const summary = await regularizeAttendance(page);
+    await sendRegularizationEmail(summary);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
     await page.screenshot({ path: "error_screenshot.png", fullPage: true }).catch(() => {});
