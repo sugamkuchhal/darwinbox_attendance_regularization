@@ -1,91 +1,86 @@
 # 🤖 Darwinbox Attendance Auto-Regularizer
 
-Runs daily in the cloud (GitHub Actions) — no machine needed.
+Automates attendance regularization in Darwinbox using Playwright, with optional post-run email summary.
 
----
+## Project Structure
 
-## 📁 Files
-
+```text
+├── index.js                    # Entry point: env validation, run orchestration, email trigger
+├── browser.js                  # Browser launch + login/MFA handling
+├── attendance.js               # Compatibility export (re-exports attendance-orchestrator)
+├── attendance-orchestrator.js  # Month/date orchestration and retry policy
+├── attendance-page.js          # Attendance page navigation helpers
+├── attendance-scan.js          # Scan rows + verification helpers
+├── attendance-actions.js       # UI actions (menu open, modal open, submit)
+├── attendance-constants.js     # Retry/time constants
+├── reason.js                   # Reason dropdown selection logic
+├── email.js                    # SMTP summary email sender
+├── config.js                   # Runtime env configuration
+├── utils.js                    # Shared utility helpers
+└── .github/workflows/darwinbox.yml
 ```
-├── index.js                         ← Main entrypoint
-├── attendance.js                    ← Attendance scanning + regularization flow
-├── browser.js                       ← Browser launch + login flow
-├── mfa.js                           ← MFA method orchestration
-├── github.js                        ← GitHub issue/comment helpers for OTP collection
-├── config.js                        ← Environment + timeout configuration
-├── utils.js                         ← Shared helper utilities
-├── package.json                     ← Node.js dependencies
-└── .github/
-    └── workflows/
-        └── darwinbox.yml            ← GitHub Actions schedule
-```
 
----
+## Setup
 
-## 🚀 Setup (One-Time)
+### 1) Add repository secrets
 
-### Step 1: Create a GitHub Repository
-1. Go to [github.com](https://github.com) → **New repository**
-2. Name it e.g. `darwinbox-automation`
-3. Set it to **Private** (important — keeps your credentials safe)
-4. Upload all files maintaining the folder structure above
+Go to **Settings → Secrets and variables → Actions** and add:
 
-### Step 2: Add Your Secrets
-Go to your repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+- `DARWINBOX_URL`
+- `DARWINBOX_USERNAME`
+- `DARWINBOX_PASSWORD`
+- `DARWINBOX_EMPLOYEE_ID`
+- `DARWINBOX_TOTP_SECRET` (if your tenant requires TOTP)
+- `GITHUB_TOKEN`
 
-Add these secrets one by one:
+### 2) Optional email summary secrets
 
-| Secret Name           | Value                                      |
-|-----------------------|--------------------------------------------|
-| `DARWINBOX_URL`       | `https://yourcompany.darwinbox.in`         |
-| `DARWINBOX_USERNAME`  | Your login email or employee ID            |
-| `DARWINBOX_PASSWORD`  | Your Darwinbox password                    |
-| `DARWINBOX_EMPLOYEE_ID` | Employee ID used in attendance URL       |
-| `GITHUB_TOKEN`        | Token with issue write permissions         |
+Add these only if you want post-run email:
 
-### Step 3: Enable GitHub Actions
-1. Go to your repo → **Actions** tab
-2. Click **"I understand my workflows, go ahead and enable them"**
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_SECURE` (`true` for 465, `false` for 587)
+- `SMTP_USER`
+- `SMTP_PASS`
+- `SMTP_FROM`
+- `REPORT_EMAIL_TO` (fallback recipient if `DARWINBOX_USERNAME` is not an email)
 
-### Step 4: Test It Manually
-1. Go to **Actions** → **Darwinbox Attendance Regularization**
-2. Click **"Run workflow"** → **Run workflow**
-3. Watch the logs — check if it succeeds
+## Schedule
 
----
+Workflow currently runs daily at `30 4 * * *` (4:30 UTC).
 
-## ⏰ Schedule
-The workflow runs **Monday–Friday at 9:30 PM IST** by default.
+## Runtime behavior (high level)
 
-To change the time, edit `.github/workflows/darwinbox.yml`:
-```yaml
-- cron: "0 16 * * 1-5"   # This is 4:00 PM UTC = 9:30 PM IST
-```
-Use [crontab.guru](https://crontab.guru) to calculate your preferred time in UTC.
+1. Login to Darwinbox.
+2. Open attendance page (current month, and previous month for days 1–4).
+3. Find eligible absent dates.
+4. For each date, try reasons in configured priority order.
+5. Retry each reason attempt up to configured limit.
+6. Verify badge after submission; if verification fails, try next reason.
+7. Send summary email (if SMTP is configured).
 
----
+## Reason priority
 
-## 🐛 Debugging
-After each run, GitHub Actions saves a **screenshot** as an artifact:
-- Go to **Actions** → click the latest run → scroll to **Artifacts**
-- Download `regularization-screenshot` to see exactly what the browser saw
+Default order:
 
----
+1. Forgot To Punch
+2. Outdoor Duty
+3. Work From Home
+4. In / Out Swiping Mistake
 
-## ⚠️ Important Notes
+Override using env var `DARWINBOX_REASON_PRIORITY` (comma-separated).
 
-1. **Selectors may need tuning** — Darwinbox UI varies by company. If the script fails, check the error screenshot and update the CSS selectors in `darwinbox_regularize.js` to match your company's Darwinbox layout.
+## Troubleshooting
 
-2. **2FA / OTP** — OTP is supported through GitHub issues (push/code/call/SMS fallback), but requires `GITHUB_TOKEN` and `GITHUB_REPOSITORY` to be present in the runtime environment.
+- **SMTP Gmail error 534 / app password required**
+  - Use Gmail App Password with 2FA enabled, not your normal account password.
+- **Email skipped due to missing SMTP vars**
+  - Ensure all `SMTP_*` secrets are mapped in workflow env.
+- **Verification fails after submit**
+  - Script treats this as failed for that reason and moves to next configured reason.
 
-3. **Already regularized days** — The script tries to regularize yesterday's attendance. If already regularized, Darwinbox may show an error — that's fine, the script will still exit cleanly.
+## Security
 
-4. **Security** — Always keep your repo **Private**. GitHub Secrets are encrypted and never exposed in logs.
-
----
-
-## 🔧 Customizing
-
-- **Regularize today instead of yesterday**: In `darwinbox_regularize.js`, change `getYesterdayDate()` to `getTodayDate()` on the date fill line.
-- **Skip weekends**: Already handled — the cron runs `1-5` (Mon–Fri only).
-- **Different punch times per day**: Let me know and I can add day-of-week logic.
+- Keep repository private.
+- Use GitHub Secrets for all credentials.
+- Never hardcode usernames/passwords in code.
