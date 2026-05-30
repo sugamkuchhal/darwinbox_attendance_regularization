@@ -54,10 +54,11 @@ Workflow currently runs daily at `30 4 * * *` (4:30 UTC).
 1. Login to Darwinbox.
 2. Open attendance page (current month, and previous month for days 1–4).
 3. Find eligible absent dates.
-4. For each date, try reasons in configured priority order.
-5. Retry each reason attempt up to configured limit.
-6. Verify badge after submission; if verification fails, try next reason.
-7. Send summary email (if SMTP is configured).
+4. Load repo-configured Outdoor Duty dates from `outdoor-duty-dates.csv`.
+5. For each date, try reasons in configured priority order. Outdoor Duty CSV matches try `Outdoor Duty` first, then the remaining reasons.
+6. Retry each reason attempt up to configured limit.
+7. Verify badge after submission; if verification fails, try next reason.
+8. Send summary email (if SMTP is configured).
 
 ## Reason priority
 
@@ -69,6 +70,18 @@ Default order:
 4. In / Out Swiping Mistake
 
 Override using env var `DARWINBOX_REASON_PRIORITY` (comma-separated).
+
+## Outdoor Duty dates
+
+Add Outdoor Duty dates to `outdoor-duty-dates.csv` using a single `date` column in `DD-MM-YYYY` format:
+
+```csv
+date
+11-05-2026
+12-05-2026
+```
+
+When an absent date is present in this CSV, the script tries `Outdoor Duty` first for that date, followed by the rest of the configured reason priority. If the CSV is missing, unreadable, missing the `date` header, or contains an invalid date, the run fails before regularization starts.
 
 ## Troubleshooting
 

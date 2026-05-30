@@ -5,6 +5,7 @@ const { reloadInMonthContext } = require("./attendance-page");
 const { findAbsentDates, verifySubmission } = require("./attendance-scan");
 const { openContextMenu, selectTimeCorrectionItem, clickSubmit } = require("./attendance-actions");
 const { ATTEMPTS_PER_REASON, UI_SLEEP_RETRY_MS } = require("./attendance-constants");
+const { loadOutdoorDutyDates, buildReasonPriorityForDate } = require("./outdoor-duty-dates");
 function buildMonthContexts(todayDate = new Date()) {
   const dayOfMonth = todayDate.getDate();
   return (dayOfMonth >= 1 && dayOfMonth <= 4)
@@ -35,7 +36,7 @@ function logOverallSummary(overall) {
     console.log("✅ Total failed    (0): none");
   }
 }
-async function runMonthContext(page, monthContext) {
+async function runMonthContext(page, monthContext, outdoorDutyDates) {
   const reloadForContext = () => reloadInMonthContext(page, monthContext);
   console.log("\n" + "=".repeat(60));
   console.log(`📆 Month context: ${monthContext.toUpperCase()}`);
@@ -53,7 +54,7 @@ async function runMonthContext(page, monthContext) {
   console.log("─".repeat(50));
   const results = { succeeded: [], failed: [] };
   for (const date of absentDates) {
-    const ok = await processDate(page, date, reloadForContext);
+    const ok = await processDate(page, date, reloadForContext, outdoorDutyDates);
     (ok ? results.succeeded : results.failed).push(date);
   }
   logMonthSummary(monthContext, results);
@@ -97,9 +98,12 @@ async function verifyReasonAttempt(page, date, reason, submitted) {
   console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
   return false;
 }
-async function processDate(page, date, reloadView) {
+async function processDate(page, date, reloadView, outdoorDutyDates) {
   console.log(`\n📝 Processing: ${date}`);
-  const reasons = getReasonPriority();
+  const reasons = buildReasonPriorityForDate(date, outdoorDutyDates, getReasonPriority());
+  if (outdoorDutyDates.has(date)) {
+    console.log(`   🌤️ Outdoor Duty CSV match found. Prioritizing Outdoor Duty for ${date}.`);
+  }
   for (let rIdx = 0; rIdx < reasons.length; rIdx++) {
     const reason = reasons[rIdx];
     console.log(`   🧾 Trying reason (${rIdx + 1}/${reasons.length}): ${reason}`);
@@ -113,10 +117,11 @@ async function processDate(page, date, reloadView) {
 }
 // Public entrypoint for attendance regularization.
 async function regularizeAttendance(page) {
+  const outdoorDutyDates = loadOutdoorDutyDates();
   const monthContexts = buildMonthContexts(new Date());
   const overall = { succeeded: [], failed: [] };
   for (const monthContext of monthContexts) {
-    const results = await runMonthContext(page, monthContext);
+    const results = await runMonthContext(page, monthContext, outdoorDutyDates);
     overall.succeeded.push(...results.succeeded.map(d => `${d} (${monthContext})`));
     overall.failed.push(...results.failed.map(d => `${d} (${monthContext})`));
   }
