@@ -2,11 +2,51 @@
 const { DARWINBOX_URL, EMPLOYEE_ID } = require("./config");
 const { sleep } = require("./utils");
 
+async function clickLocator(locator, description, timeout = 4000) {
+  await locator.scrollIntoViewIfNeeded({ timeout }).catch(() => {});
+
+  try {
+    await locator.click({ timeout });
+    return;
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.warn(`⚠️ ${description} normal click failed, retrying with force: ${message}`);
+  }
+
+  try {
+    await locator.click({ timeout, force: true });
+    return;
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.warn(`⚠️ ${description} forced click failed, retrying with DOM click: ${message}`);
+  }
+
+  await locator.evaluate((element) => {
+    if (typeof element.click === "function") {
+      element.click();
+      return;
+    }
+
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  });
+}
+
+async function clickFirstAvailable(candidates, description, timeout = 4000) {
+  for (const candidate of candidates) {
+    if (await candidate.count() === 0) continue;
+    await clickLocator(candidate.first(), description, timeout);
+    return;
+  }
+
+  throw new Error(`${description} not found`);
+}
+
 async function activateListView(page) {
   try {
     const listSvg = page.locator('svg[viewBox="0 0 12 10"]').first();
     if (await listSvg.count() > 0) {
-      await listSvg.locator("..").click({ timeout: 3000 });
+      const clickableParent = listSvg.locator("xpath=ancestor::*[self::button or @role='button' or contains(@class,'btn')][1]").first();
+      await clickFirstAvailable([clickableParent, listSvg], "List view toggle", 3000);
       await sleep(1500);
       console.log("✅ List view activated");
     }
@@ -24,11 +64,10 @@ async function reloadAttendancePage(page) {
 async function clickPreviousMonth(page) {
   const leftChevronPath = 'path[d="M15 18L9.70711 12.7071C9.31658 12.3166 9.31658 11.6834 9.70711 11.2929L15 6"]';
   const path = page.locator(leftChevronPath).first();
-  if (await path.count() === 0) throw new Error("Previous month chevron path not found");
 
   const clickableParent = path.locator("xpath=ancestor::*[self::button or @role='button' or contains(@class,'btn')][1]").first();
-  if (await clickableParent.count() > 0) await clickableParent.click({ timeout: 4000 });
-  else await path.click({ timeout: 4000 });
+  const svg = path.locator("xpath=ancestor::*[local-name()='svg'][1]").first();
+  await clickFirstAvailable([clickableParent, svg, path], "Previous month chevron", 4000);
 
   await sleep(1500);
   console.log("✅ Switched to previous month");
