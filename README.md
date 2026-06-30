@@ -7,7 +7,6 @@ Automates attendance regularization in Darwinbox using Playwright, with optional
 ```text
 ├── index.js                    # Entry point: env validation, run orchestration, email trigger
 ├── browser.js                  # Browser launch + login/MFA handling
-├── attendance.js               # Compatibility export (re-exports attendance-orchestrator)
 ├── attendance-orchestrator.js  # Month/date orchestration and retry policy
 ├── attendance-page.js          # Attendance page navigation helpers
 ├── attendance-scan.js          # Scan rows + verification helpers
