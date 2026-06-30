@@ -1,1 +1,14 @@
 node_modules/
+
+# Debug screenshots produced at runtime — may contain login UI, employee ID,
+# attendance dates, partially-masked phone numbers from the MFA picker, etc.
+# These are uploaded as a short-retention GitHub Actions artifact instead;
+# they should never be committed to the repo itself.
+*.png
+*.jpg
+*.jpeg
+
+# Local env files — secrets belong in GitHub Actions Secrets, never in a file
+# that could accidentally get committed.
+.env
+.env.*

@@ -94,6 +94,6 @@ When an absent date is present in this CSV, the script tries `Outdoor Duty` firs
 
 ## Security
 
-- Keep repository private.
-- Use GitHub Secrets for all credentials.
-- Never hardcode usernames/passwords in code.
+- **Keep this repository private.** This is not optional. Every run uploads debug screenshots (login UI, attendance dates, employee ID, partially-masked MFA phone number) as a GitHub Actions artifact, and Actions logs may include other run details. On a public repo, both the artifacts and the logs are visible to anyone with the URL — there is no way to make those debugging aids work safely on a public repo.
+- Use GitHub Secrets for all credentials — never hardcode usernames/passwords/tokens in code or commit a `.env` file.
+- The bundled `.gitignore` blocks `*.png`/`.env*` from being committed, but that only prevents *new* accidental commits — it does not protect Actions artifact/log visibility once the repo is public.

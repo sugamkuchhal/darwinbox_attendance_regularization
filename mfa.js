@@ -3,6 +3,18 @@ const { DARWINBOX_URL, WAIT_MINUTES, TIMEOUT_MS, POLL_INTERVAL_MS, MFA_METHOD_OR
 const { sleep } = require("./utils");
 const { createGitHubIssue, closeGitHubIssue, pollIssueForCode } = require("./github");
 
+// Strip query strings before logging — Microsoft SSO redirects can carry
+// session/state tokens as URL params, and these logs may end up visible
+// in GitHub Actions run logs (publicly, if the repo is ever public).
+function redactUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    return `${u.origin}${u.pathname}`;
+  } catch (_) {
+    return "[unparseable url]";
+  }
+}
+
 function base32ToBuffer(base32) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   const clean = (base32 || "").toUpperCase().replace(/=+$/g, "").replace(/\s+/g, "");
@@ -86,7 +98,7 @@ async function pollPageForApproval(page, label) {
     const currentUrl  = page.url();
     const onDarwinbox = currentUrl.includes(darwinboxHost);
     const secsLeft    = Math.round((deadline - Date.now()) / 1000);
-    console.log(`⏳ [${label}] Current URL: ${currentUrl} — ${secsLeft}s remaining`);
+    console.log(`⏳ [${label}] Current URL: ${redactUrl(currentUrl)} — ${secsLeft}s remaining`);
     if (onDarwinbox) {
       console.log(`✅ [${label}] Reached Darwinbox — approved!`);
       await page.screenshot({ path: `approved_${label}.png` });
