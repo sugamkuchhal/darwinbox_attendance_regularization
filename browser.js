@@ -139,12 +139,25 @@ async function handleStaySignedIn(page) {
   } catch (_) {}
 }
 
+// Logs/error messages should never include query strings — some Microsoft SSO
+// redirects carry session/state tokens as URL params, and these strings end up
+// in Actions logs (and, if the repo is ever public, in publicly visible logs).
+function redactUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    return `${u.origin}${u.pathname}`;
+  } catch (_) {
+    return "[unparseable url]";
+  }
+}
+
 async function verifyLogin(page) {
   const url = page.url();
-  console.log(`✅ Post-login URL: ${url}`);
+  const safeUrl = redactUrl(url);
+  console.log(`✅ Post-login URL: ${safeUrl}`);
   if (!url.includes(new URL(DARWINBOX_URL).hostname)) {
     await page.screenshot({ path: "post_login_check.png" });
-    throw new Error(`Login failed — not on Darwinbox. URL: ${url}`);
+    throw new Error(`Login failed — not on Darwinbox. URL: ${safeUrl}`);
   }
   console.log("✅ Logged in to Darwinbox");
 }
