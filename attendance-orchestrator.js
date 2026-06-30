@@ -4,7 +4,7 @@ const { selectReason, getReasonPriority } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
 const { findAbsentDates, verifySubmission } = require("./attendance-scan");
 const { openContextMenu, selectTimeCorrectionItem, clickSubmit } = require("./attendance-actions");
-const { ATTEMPTS_PER_REASON, UI_SLEEP_RETRY_MS } = require("./attendance-constants");
+const { ATTEMPTS_PER_REASON, retryDelayMs } = require("./attendance-constants");
 const { loadOutdoorDutyDates, buildReasonPriorityForDate } = require("./outdoor-duty-dates");
 function buildMonthContexts(todayDate = new Date()) {
   const dayOfMonth = todayDate.getDate();
@@ -81,7 +81,7 @@ async function attemptReasonWithRetries(page, date, reason, reloadView) {
       console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
       await page.screenshot({ path: buildErrorScreenshotName(date, reason, attempt) });
       try { await page.keyboard.press("Escape"); } catch (_) {}
-      await sleep(UI_SLEEP_RETRY_MS);
+      await sleep(retryDelayMs(attempt));
     }
   }
   return false;

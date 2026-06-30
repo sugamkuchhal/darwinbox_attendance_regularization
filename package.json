@@ -4,7 +4,8 @@
   "description": "Auto-regularize Darwinbox attendance daily via GitHub Actions",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "playwright": "^1.44.0",

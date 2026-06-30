@@ -258,4 +258,4 @@ async function handleMFA(page) {
   throw new Error(`All MFA methods exhausted (${MFA_METHOD_ORDER.join(", ")}) — no response received`);
 }
 
-module.exports = { handleMFA, getTotpCodes };
+module.exports = { handleMFA, getTotpCodes, generateTotp, base32ToBuffer };
