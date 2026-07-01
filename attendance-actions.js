@@ -43,7 +43,7 @@ async function selectTimeCorrectionItem(page, btn) {
   await btn.click({ timeout: MODAL_OPEN_TIMEOUT_MS });
   await sleep(UI_SLEEP_MENU_MS);
   const box2 = await btn.boundingBox();
-  await page.mouse.click(box2.x + box2.width / 2, box2.y - 40);
+  await page.mouse.click(box2.x + box2.width / 2, box2.y - 100);
   console.log(`   ✅ Clicked Time Correction (upward fallback)`);
 
   await waitForModal(page, MODAL_OPEN_TIMEOUT_MS);
