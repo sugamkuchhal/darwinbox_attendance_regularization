@@ -16,15 +16,37 @@ async function openContextMenu(page, date) {
   return btn;
 }
 
-async function selectTimeCorrectionItem(page, btn) {
-  const box = await btn.boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 20);
-  console.log(`   ✅ Clicked Time Correction`);
-
+async function waitForModal(page, timeout) {
   await page.waitForFunction(() => {
     const modal = document.querySelector("dbx-ds-modal");
     return modal && modal.querySelectorAll("dbx-ds-dropdown").length >= 2;
-  }, { timeout: MODAL_OPEN_TIMEOUT_MS });
+  }, { timeout });
+}
+
+async function selectTimeCorrectionItem(page, btn) {
+  // Primary: coordinate-based click 20px below the ⋮ button
+  const box = await btn.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 20);
+  console.log(`   ✅ Clicked Time Correction (coordinate)`);
+
+  try {
+    await waitForModal(page, 5000);
+    console.log(`   ✅ Modal ready`);
+    return;
+  } catch (_) {
+    console.log(`   ⚠️ Coordinate click didn't open modal — trying text locator fallback`);
+  }
+
+  // Fallback: menu likely opened upward (last rows). Dismiss, re-open, click above.
+  await page.keyboard.press("Escape").catch(() => {});
+  await sleep(UI_SLEEP_SHORT_MS);
+  await btn.click({ timeout: MODAL_OPEN_TIMEOUT_MS });
+  await sleep(UI_SLEEP_MENU_MS);
+  const box2 = await btn.boundingBox();
+  await page.mouse.click(box2.x + box2.width / 2, box2.y - 40);
+  console.log(`   ✅ Clicked Time Correction (upward fallback)`);
+
+  await waitForModal(page, MODAL_OPEN_TIMEOUT_MS);
   console.log(`   ✅ Modal ready`);
 }
 
