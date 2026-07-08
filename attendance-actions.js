@@ -17,8 +17,27 @@ async function openContextMenu(page, date) {
 }
 
 async function selectTimeCorrectionItem(page, btn) {
-  const box = await btn.boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 20);
+  // Click "Time Correction" via shadow DOM traversal — coordinate-independent,
+  // works whether the menu opens upward or downward.
+  const clicked = await page.evaluate(() => {
+    function searchShadow(root) {
+      const els = root.querySelectorAll("*");
+      for (const el of els) {
+        if (el.shadowRoot && searchShadow(el.shadowRoot)) return true;
+        if (
+          el.classList?.contains("menu-item-wrapper") &&
+          el.querySelector(".menu-text")?.textContent.trim() === "Time Correction"
+        ) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    }
+    return searchShadow(document);
+  });
+
+  if (!clicked) throw new Error("Time Correction menu item not found in DOM");
   console.log(`   ✅ Clicked Time Correction`);
 
   await page.waitForFunction(() => {
