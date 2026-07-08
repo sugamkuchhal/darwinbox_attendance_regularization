@@ -12,14 +12,12 @@ const { takeStepScreenshot } = require("./reporting");
 
 async function openContextMenu(page, date, monthContext = "") {
   const idx = await findContextMenuIndex(page, date, monthContext);
-  console.log(`   🔍 Context menu btn index: ${idx}`);
   const btn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(idx);
   await btn.scrollIntoViewIfNeeded();
   await sleep(UI_SLEEP_SHORT_MS);
   await btn.click({ timeout: CONTEXT_MENU_CLICK_TIMEOUT_MS });
   console.log(`   ✅ ⋮ clicked`);
   await sleep(UI_SLEEP_MENU_MS);
-  // No return value — caller no longer needs the btn reference.
 }
 
 async function selectTimeCorrectionItem(page) {
@@ -89,10 +87,9 @@ async function clickSubmit(page) {
     });
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await sleep(UI_SLEEP_SUBMIT_MS);
-    await takeStepScreenshot(page, "step_7_submitted.png", "submitted");
-    console.log(`   ✅ Submitted`);
+    await takeStepScreenshot(page, "step_submitted.png", "submitted");
   } catch (err) {
-    await takeStepScreenshot(page, "step_7_submitted_failed.png", "submit failed");
+    await takeStepScreenshot(page, "step_submitted_failed.png", "submit failed");
     throw err;
   }
 }

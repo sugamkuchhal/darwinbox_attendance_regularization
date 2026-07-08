@@ -6,6 +6,7 @@ const { getTodayStrIST, findAbsentDates, verifySubmission, findContextMenuIndex 
 const { openContextMenu, selectTimeCorrectionItem, closePanelIfOpen, clickSubmit } = require("./attendance-actions");
 const { ATTEMPTS_PER_REASON, retryDelayMs } = require("./attendance-constants");
 const { loadOutdoorDutyDates, buildReasonPriorityForDate } = require("./outdoor-duty-dates");
+const { takeStepScreenshot } = require("./reporting");
 
 // Use IST to decide whether to include the previous month (days 1–4).
 function buildMonthContexts() {
@@ -87,7 +88,7 @@ async function attemptReasonWithRetries(page, date, reason, reloadView, monthCon
       return true;
     } catch (err) {
       console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
-      await page.screenshot({ path: buildErrorScreenshotName(date, reason, attempt) });
+      await takeStepScreenshot(page, buildErrorScreenshotName(date, reason, attempt), "attempt failed", { log: true });
       await closePanelIfOpen(page);
       await sleep(retryDelayMs(attempt));
     }
@@ -114,7 +115,7 @@ async function processDate(page, date, reloadView, outdoorDutyDates, monthContex
       await reloadView();
       const verified = await verifySubmission(page, date);
       if (verified) return true;
-      await page.screenshot({ path: buildUnverifiedScreenshotName(date, reason) });
+      await takeStepScreenshot(page, buildUnverifiedScreenshotName(date, reason), "unverified", { log: true });
       console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
     } else {
       console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
@@ -141,7 +142,6 @@ async function regularizeAttendance(page) {
   }
 
   logOverallSummary(overall);
-  await page.screenshot({ path: "regularization_result.png" });
   return overall;
 }
 

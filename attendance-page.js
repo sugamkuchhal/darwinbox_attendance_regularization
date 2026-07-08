@@ -29,7 +29,6 @@ async function clickLocator(locator, description, timeout = 4000) {
       element.click();
       return;
     }
-
     element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
   });
 }
@@ -40,15 +39,14 @@ async function clickFirstAvailable(candidates, description, timeout = 4000) {
     await clickLocator(candidate.first(), description, timeout);
     return;
   }
-
   throw new Error(`${description} not found`);
 }
 
-async function getAttendanceDates(page) {
+// Internal: read visible attendance date strings from the table.
+function getAttendanceDates(page) {
   return page.evaluate(() => {
     const dates = [];
     const seen = new Set();
-
     for (const row of document.querySelectorAll("table tr")) {
       const dateSpan = row.querySelector('td.primary-cell span[dir="auto"]');
       const dateStr = (dateSpan?.innerText || "").trim();
@@ -56,7 +54,6 @@ async function getAttendanceDates(page) {
       seen.add(dateStr);
       dates.push(dateStr);
     }
-
     return dates;
   });
 }
@@ -65,21 +62,19 @@ function getDateSignature(dates) {
   return dates.join("|");
 }
 
-async function waitForAttendanceDates(page, timeout = 5000) {
+// Internal: wait until at least one date row is visible, then return them.
+async function waitForAttendanceDates(page, timeout = 8000) {
   await page.waitForFunction(() => {
     return [...document.querySelectorAll('td.primary-cell span[dir="auto"]')]
       .some(span => /^\d{2}-\d{2}-\d{4}$/.test((span.innerText || "").trim()));
   }, { timeout });
-
   return getAttendanceDates(page);
 }
 
 function getPreviousMonthFromDates(dates) {
-  if (dates.length === 0) throw new Error("Cannot determine previous month because no attendance dates are visible");
-
+  if (dates.length === 0) throw new Error("Cannot determine previous month — no attendance dates visible");
   const [, visibleMonth, visibleYear] = dates[0].split("-").map(Number);
   const previous = new Date(Date.UTC(visibleYear, visibleMonth - 2, 1));
-
   return {
     month: String(previous.getUTCMonth() + 1).padStart(2, "0"),
     year: String(previous.getUTCFullYear()),
@@ -95,7 +90,7 @@ async function waitForPreviousMonth(page, expectedPreviousMonth) {
             const dateStr = (span.innerText || "").trim();
             return /^\d{2}-\d{2}-\d{4}$/.test(dateStr)
               && dateStr.slice(3, 5) === expected.month
-              && dateStr.slice(6) === expected.year;
+              && dateStr.slice(6)    === expected.year;
           });
       },
       expectedPreviousMonth,
@@ -113,8 +108,8 @@ async function activateListView(page) {
     if (await listSvg.count() > 0) {
       const clickableParent = listSvg.locator(CLICKABLE_ANCESTOR_SELECTOR).first();
       await clickFirstAvailable([clickableParent, listSvg], "List view toggle", 3000);
-      await sleep(1500);
-      console.log("✅ List view activated");
+      // Wait for the table rows to appear instead of a fixed sleep.
+      await waitForAttendanceDates(page, 5000).catch(() => {});
     }
   } catch (err) {
     console.warn(`⚠️ List view toggle failed: ${err.message}`);
@@ -123,14 +118,12 @@ async function activateListView(page) {
 
 async function reloadAttendancePage(page) {
   await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
-  await sleep(2000);
   await activateListView(page);
 }
 
 async function clickPreviousMonthCandidate(page, index) {
   const path = page.locator(LEFT_CHEVRON_PATH).nth(index);
   if (await path.count() === 0) return false;
-
   const clickableParent = path.locator(CLICKABLE_ANCESTOR_SELECTOR).first();
   const svg = path.locator("xpath=ancestor::*[local-name()='svg'][1]").first();
   await clickFirstAvailable([clickableParent, svg, path], `Previous month chevron candidate ${index + 1}`, 4000);
@@ -139,40 +132,34 @@ async function clickPreviousMonthCandidate(page, index) {
 
 async function clickPreviousMonth(page) {
   const chevronCount = await page.locator(LEFT_CHEVRON_PATH).count();
-  if (chevronCount === 0) throw new Error("Previous month chevron path not found");
+  if (chevronCount === 0) throw new Error("Previous month chevron not found");
 
-  const beforeDates = await waitForAttendanceDates(page);
-  const beforeSignature = getDateSignature(beforeDates);
+  const beforeDates          = await waitForAttendanceDates(page);
+  const beforeSignature      = getDateSignature(beforeDates);
   const expectedPreviousMonth = getPreviousMonthFromDates(beforeDates);
-  console.log(`🧭 Expecting previous month ${expectedPreviousMonth.month}-${expectedPreviousMonth.year}; visible dates before click: ${beforeDates[0]} … ${beforeDates[beforeDates.length - 1]}`);
 
   for (let index = 0; index < chevronCount; index++) {
     try {
       await clickPreviousMonthCandidate(page, index);
     } catch (err) {
-      console.warn(`⚠️ Previous month chevron candidate ${index + 1} click failed: ${err.message}`);
+      console.warn(`⚠️ Chevron candidate ${index + 1} click failed: ${err.message}`);
       continue;
     }
 
     await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
 
     if (await waitForPreviousMonth(page, expectedPreviousMonth)) {
-      await sleep(1000);
-      const afterDates = await getAttendanceDates(page);
-      console.log(`✅ Switched to previous month (${expectedPreviousMonth.month}-${expectedPreviousMonth.year}); visible dates: ${afterDates[0]} … ${afterDates[afterDates.length - 1]}`);
+      await sleep(500);
+      console.log(`✅ Previous month: ${expectedPreviousMonth.month}-${expectedPreviousMonth.year}`);
       return;
     }
 
     const afterDates = await getAttendanceDates(page);
-    const afterSignature = getDateSignature(afterDates);
-    const detail = afterDates.length > 0
-      ? `visible dates are ${afterDates[0]} … ${afterDates[afterDates.length - 1]}`
-      : "no attendance dates are visible";
-    const changed = afterSignature !== beforeSignature ? "changed, but not to the expected previous month" : "did not change";
-    console.warn(`⚠️ Previous month chevron candidate ${index + 1} ${changed}; ${detail}`);
+    const changed    = getDateSignature(afterDates) !== beforeSignature;
+    console.warn(`⚠️ Chevron candidate ${index + 1} ${changed ? "changed view but not to expected month" : "had no effect"}`);
   }
 
-  throw new Error(`Previous month navigation did not change attendance dates after ${chevronCount} chevron candidate(s)`);
+  throw new Error(`Previous month navigation failed after ${chevronCount} chevron candidate(s)`);
 }
 
 async function reloadInMonthContext(page, monthContext) {
