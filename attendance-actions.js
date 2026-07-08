@@ -10,8 +10,8 @@ const {
 } = require("./attendance-constants");
 const { takeStepScreenshot } = require("./reporting");
 
-async function openContextMenu(page, date) {
-  const idx = await findContextMenuIndex(page, date);
+async function openContextMenu(page, date, monthContext = "") {
+  const idx = await findContextMenuIndex(page, date, monthContext);
   console.log(`   🔍 Context menu btn index: ${idx}`);
   const btn = page.locator("DBX-DS-BUTTON.row_context_menu").nth(idx);
   await btn.scrollIntoViewIfNeeded();
@@ -19,12 +19,11 @@ async function openContextMenu(page, date) {
   await btn.click({ timeout: CONTEXT_MENU_CLICK_TIMEOUT_MS });
   console.log(`   ✅ ⋮ clicked`);
   await sleep(UI_SLEEP_MENU_MS);
-  return btn;
+  // No return value — caller no longer needs the btn reference.
 }
 
 async function selectTimeCorrectionItem(page) {
-  // Click "Time Correction" via shadow DOM traversal — coordinate-independent,
-  // works whether the menu opens upward or downward.
+  // Click via shadow DOM traversal — direction-independent (menu opens up or down).
   const clicked = await page.evaluate(() => {
     function searchShadow(root) {
       const els = root.querySelectorAll("*");
@@ -54,37 +53,38 @@ async function selectTimeCorrectionItem(page) {
 }
 
 async function closePanelIfOpen(page) {
-  // Close the side panel via its X button (Escape does not close it).
+  // Close via the X button in the modal's shadow root header.
+  // Avoids hardcoded screen coordinates — works at any viewport width.
   try {
     await page.evaluate(() => {
-      function searchShadow(root) {
-        const els = root.querySelectorAll("*");
-        for (const el of els) {
-          if (el.shadowRoot && searchShadow(el.shadowRoot)) return true;
-          // The close button is the first dbx-ds-button in the modal shadow footer area
-          // Its visible bounding box is top-right of the panel (x > 1400, y < 100).
-          if (el.tagName === "DBX-DS-BUTTON" || el.tagName === "BUTTON") {
-            const rect = el.getBoundingClientRect();
-            if (rect.x > 1400 && rect.y < 100 && rect.width > 0) {
-              el.click();
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-      searchShadow(document);
+      const modal = document.querySelector("dbx-ds-modal");
+      if (!modal || !modal.shadowRoot) return;
+      const footerBtns = new Set(
+        [...modal.shadowRoot.querySelectorAll(".footer dbx-ds-button, .footer button")]
+      );
+      const closeBtn = [...modal.shadowRoot.querySelectorAll("dbx-ds-button, button")]
+        .find(b => !footerBtns.has(b));
+      if (closeBtn) closeBtn.click();
     });
   } catch (_) {}
-  // Fallback: Escape key
+  // Fallback: Escape key.
   try { await page.keyboard.press("Escape"); } catch (_) {}
 }
 
 async function clickSubmit(page) {
   try {
+    // Find the Submit button by text in the modal shadow root —
+    // more robust than selecting by last index.
     const box = await page.evaluate(() => {
-      const btns = document.querySelector("dbx-ds-modal").shadowRoot.querySelectorAll(".footer dbx-ds-button");
-      const r = btns[btns.length - 1].getBoundingClientRect();
+      const modal = document.querySelector("dbx-ds-modal");
+      if (!modal || !modal.shadowRoot) throw new Error("modal shadow root not found");
+      const btns = [...modal.shadowRoot.querySelectorAll(".footer dbx-ds-button")];
+      const submitBtn = btns.find(b => {
+        const inner = b.shadowRoot?.querySelector("button");
+        return (inner?.textContent?.trim() || b.textContent?.trim()) === "Submit";
+      });
+      if (!submitBtn) throw new Error("Submit button not found in modal footer");
+      const r = submitBtn.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     });
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);

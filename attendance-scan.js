@@ -5,21 +5,20 @@
 function getTodayStrIST() {
   const now = new Date();
   const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const dd = String(ist.getDate()).padStart(2, "0");
-  const mm = String(ist.getMonth() + 1).padStart(2, "0");
+  const dd   = String(ist.getDate()).padStart(2, "0");
+  const mm   = String(ist.getMonth() + 1).padStart(2, "0");
   const yyyy = ist.getFullYear();
   return `${dd}-${mm}-${yyyy}`;
 }
 
 async function findAbsentDates(page) {
-  console.log("🔍 Scanning attendance rows...");
   const todayStr = getTodayStrIST();
-  console.log(`📅 Today (IST): ${todayStr} — skipping today and future`);
+  console.log(`📅 Today (IST): ${todayStr}`);
 
-  const { results, skipped, totalRows } = await page.evaluate((today) => {
-    const results = [];
-    const skipped = [];
-    const seen    = new Set();
+  const { results, skippedExisting, totalRows } = await page.evaluate((today) => {
+    const results         = [];
+    const skippedExisting = []; // only "request already exists" — actionable info
+    const seen            = new Set();
 
     function toNum(s) {
       const [dd, mm, yyyy] = s.split("-");
@@ -36,32 +35,30 @@ async function findAbsentDates(page) {
       if (!dateSpan) continue;
       const dateStr = (dateSpan.innerText || "").trim();
       if (!/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) continue;
-
-      if (seen.has(dateStr))          { skipped.push({ date: dateStr, reason: "duplicate" }); continue; }
-      if (toNum(dateStr) >= todayNum) { skipped.push({ date: dateStr, reason: "today or future" }); continue; }
+      if (seen.has(dateStr) || toNum(dateStr) >= todayNum) continue;
       seen.add(dateStr);
 
       const attendanceSpan   = row.querySelector('td.primary-cell.sorting_1 span#dbx-overflow-span');
       const attendanceStatus = (attendanceSpan?.innerText || "").trim();
       const hasRequestBadge  = !!row.querySelector('dbx-ds-status-tag');
 
-      if (attendanceStatus !== "Absent") {
-        skipped.push({ date: dateStr, reason: `not absent: ${attendanceStatus || "unknown"}` });
-        continue;
-      }
+      if (attendanceStatus !== "Absent") continue;
+
       if (hasRequestBadge) {
-        skipped.push({ date: dateStr, reason: "request already exists" });
+        skippedExisting.push(dateStr);
         continue;
       }
 
       results.push(dateStr);
     }
 
-    return { results, skipped, totalRows };
+    return { results, skippedExisting, totalRows };
   }, todayStr);
 
-  console.log(`🔍 Scanned ${totalRows} rows`);
-  skipped.forEach(s => console.log(`   ⏭️  ${s.date} — ${s.reason}`));
+  console.log(`🔍 Scanned ${totalRows} rows — ${results.length} to regularize, ${skippedExisting.length} already pending`);
+  if (skippedExisting.length) {
+    console.log(`   ⏭️  Already pending: ${skippedExisting.join(", ")}`);
+  }
   return results;
 }
 
@@ -73,18 +70,18 @@ async function verifySubmission(page, date) {
     });
     if (!row) return { ok: false, reason: "row not found after reload" };
     const hasBadge = !!row.querySelector('dbx-ds-status-tag');
-    return { ok: hasBadge, reason: hasBadge ? "badge present" : "no badge found — request may not have gone through" };
+    return { ok: hasBadge, reason: hasBadge ? "badge present" : "no badge — request may not have gone through" };
   }, date);
 
   if (verified.ok) {
-    console.log(`   ✅ Verified: ${date} — request badge confirmed`);
+    console.log(`   ✅ Verified: ${date} — badge confirmed`);
   } else {
     console.warn(`   ⚠️ Verification failed: ${date} — ${verified.reason}`);
   }
   return verified.ok;
 }
 
-async function findContextMenuIndex(page, date) {
+async function findContextMenuIndex(page, date, monthContext = "") {
   const idx = await page.evaluate((targetDate) => {
     const targetRow = [...document.querySelectorAll("table tr")].find(r => {
       const span = r.querySelector('td.primary-cell span[dir="auto"]');
@@ -95,7 +92,7 @@ async function findContextMenuIndex(page, date) {
       .findIndex(btn => targetRow.contains(btn));
   }, date);
 
-  if (idx === -1) throw new Error(`Row not found for date ${date}`);
+  if (idx === -1) throw new Error(`Row not found for date ${date}${monthContext ? ` (${monthContext})` : ""}`);
   return idx;
 }
 
