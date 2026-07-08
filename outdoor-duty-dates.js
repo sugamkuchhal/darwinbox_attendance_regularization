@@ -15,18 +15,14 @@ function assertValidDate(date) {
   const isValid = parsed.getUTCFullYear() === year
     && parsed.getUTCMonth()  === month - 1
     && parsed.getUTCDate()   === day;
-  if (!isValid) {
-    throw new Error(`Invalid outdoor duty date "${date}". Date does not exist.`);
-  }
+  if (!isValid) throw new Error(`Invalid outdoor duty date "${date}". Date does not exist.`);
 }
 
 function parseOutdoorDutyDatesCsv(csv) {
   const lines = csv.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const [header, ...rows] = lines;
-
   if (!header) throw new Error("Outdoor duty dates CSV is empty. Expected a 'date' header.");
   if (header !== "date") throw new Error("Outdoor duty dates CSV must start with a single 'date' header.");
-
   const dates = new Set();
   rows.forEach((row, idx) => {
     const columns = row.split(",").map(col => col.trim());
@@ -53,8 +49,8 @@ function loadOutdoorDutyDates(csvPath = OUTDOOR_DUTY_DATES_CSV) {
   return dates;
 }
 
+// baseReasons is optional — callers no longer need to import getReasonPriority separately.
 function buildReasonPriorityForDate(date, outdoorDutyDates, baseReasons) {
-  // Short-circuit immediately when the CSV is empty — common case.
   if (outdoorDutyDates.size === 0 || !outdoorDutyDates.has(date)) return baseReasons;
   const remaining = baseReasons.filter(r => r.trim().toLowerCase() !== OUTDOOR_DUTY_REASON.toLowerCase());
   return [OUTDOOR_DUTY_REASON, ...remaining];

@@ -18,14 +18,14 @@ function screenshotPath(filename) {
   return `${RUN_PREFIX}_${filename}`;
 }
 
-// Silent by default — step screenshots are saved without cluttering the log.
-// Pass log: true to emit a line (used for error screenshots).
+// Silent by default — step screenshots saved without cluttering the log.
+// Pass { log: true } to emit a line (used for error screenshots).
 async function takeStepScreenshot(page, filename, note = "", { log = false } = {}) {
-  const path = screenshotPath(filename);
-  await page.screenshot({ path });
+  const filePath = screenshotPath(filename);
+  await page.screenshot({ path: filePath });
   if (log) {
-    console.log(`   📸 ${path}${note ? ` — ${note}` : ""}`);
+    console.log(`   📸 ${filePath}${note ? ` — ${note}` : ""}`);
   }
 }
 
-module.exports = { RUN_PREFIX, screenshotPath, takeStepScreenshot };
+module.exports = { RUN_PREFIX, takeStepScreenshot };

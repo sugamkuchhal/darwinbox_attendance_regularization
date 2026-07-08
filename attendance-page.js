@@ -167,4 +167,4 @@ async function reloadInMonthContext(page, monthContext) {
   if (monthContext === "previous") await clickPreviousMonth(page);
 }
 
-module.exports = { activateListView, reloadAttendancePage, clickPreviousMonth, reloadInMonthContext };
+module.exports = { reloadInMonthContext };

@@ -2,7 +2,7 @@
 const { sleep } = require("./utils");
 const { selectReason, getReasonPriority } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
-const { getTodayStrIST, findAbsentDates, verifySubmission, findContextMenuIndex } = require("./attendance-scan");
+const { getTodayStrIST, findAbsentDates, verifySubmission } = require("./attendance-scan");
 const { openContextMenu, selectTimeCorrectionItem, closePanelIfOpen, clickSubmit } = require("./attendance-actions");
 const { ATTEMPTS_PER_REASON, retryDelayMs } = require("./attendance-constants");
 const { loadOutdoorDutyDates, buildReasonPriorityForDate } = require("./outdoor-duty-dates");
