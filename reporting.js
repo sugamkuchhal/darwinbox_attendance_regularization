@@ -28,4 +28,4 @@ async function takeStepScreenshot(page, filename, note = "", { log = false } = {
   }
 }
 
-module.exports = { RUN_PREFIX, takeStepScreenshot };
+module.exports = { takeStepScreenshot };

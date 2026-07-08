@@ -1,6 +1,6 @@
 // Coordinates month/date processing and reason-based retries.
 const { sleep } = require("./utils");
-const { selectReason, getReasonPriority } = require("./reason");
+const { selectReason } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
 const { getTodayStrIST, findAbsentDates, verifySubmission } = require("./attendance-scan");
 const { openContextMenu, selectTimeCorrectionItem, closePanelIfOpen, clickSubmit } = require("./attendance-actions");
@@ -98,7 +98,7 @@ async function attemptReasonWithRetries(page, date, reason, reloadView, monthCon
 
 async function processDate(page, date, reloadView, outdoorDutyDates, monthContext = "") {
   console.log(`\n📝 Processing: ${date}`);
-  const reasons = buildReasonPriorityForDate(date, outdoorDutyDates, getReasonPriority());
+  const reasons = buildReasonPriorityForDate(date, outdoorDutyDates);
   if (outdoorDutyDates.has(date)) {
     console.log(`   🌤️ Outdoor Duty date — prioritizing Outdoor Duty reason`);
   }
