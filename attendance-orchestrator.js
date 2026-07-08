@@ -3,30 +3,36 @@ const { sleep } = require("./utils");
 const { selectReason, getReasonPriority } = require("./reason");
 const { reloadInMonthContext } = require("./attendance-page");
 const { findAbsentDates, verifySubmission } = require("./attendance-scan");
-const { openContextMenu, selectTimeCorrectionItem, clickSubmit } = require("./attendance-actions");
+const { openContextMenu, selectTimeCorrectionItem, closePanelIfOpen, clickSubmit } = require("./attendance-actions");
 const { ATTEMPTS_PER_REASON, retryDelayMs } = require("./attendance-constants");
 const { loadOutdoorDutyDates, buildReasonPriorityForDate } = require("./outdoor-duty-dates");
+
 function buildMonthContexts(todayDate = new Date()) {
   const dayOfMonth = todayDate.getDate();
   return (dayOfMonth >= 1 && dayOfMonth <= 4)
     ? ["previous", "current"]
     : ["current"];
 }
+
 function sanitizeReason(reason) {
   return reason.replace(/[^a-z0-9]+/gi, "_");
 }
+
 function buildErrorScreenshotName(date, reason, attempt) {
   return `error_${date}_${sanitizeReason(reason)}_attempt${attempt}.png`;
 }
+
 function buildUnverifiedScreenshotName(date, reason) {
   return `unverified_${date}_${sanitizeReason(reason)}.png`;
 }
+
 function logMonthSummary(monthContext, results) {
   console.log(`✅ ${monthContext} month succeeded (${results.succeeded.length}): ${results.succeeded.join(", ") || "none"}`);
   if (results.failed.length > 0) {
     console.warn(`❌ ${monthContext} month failed    (${results.failed.length}): ${results.failed.join(", ")}`);
   }
 }
+
 function logOverallSummary(overall) {
   console.log("\n" + "─".repeat(50));
   console.log(`✅ Total succeeded (${overall.succeeded.length}): ${overall.succeeded.join(", ") || "none"}`);
@@ -36,6 +42,7 @@ function logOverallSummary(overall) {
     console.log("✅ Total failed    (0): none");
   }
 }
+
 async function runMonthContext(page, monthContext, outdoorDutyDates) {
   const reloadForContext = () => reloadInMonthContext(page, monthContext);
   console.log("\n" + "=".repeat(60));
@@ -52,6 +59,7 @@ async function runMonthContext(page, monthContext, outdoorDutyDates) {
   console.log(`📋 ${absentDates.length} absent day(s) to regularize (${monthContext}):`);
   absentDates.forEach((d, i) => console.log(`   ${i + 1}. ${d}`));
   console.log("─".repeat(50));
+
   const results = { succeeded: [], failed: [] };
   for (const date of absentDates) {
     const ok = await processDate(page, date, reloadForContext, outdoorDutyDates);
@@ -60,13 +68,15 @@ async function runMonthContext(page, monthContext, outdoorDutyDates) {
   logMonthSummary(monthContext, results);
   return results;
 }
+
 // Executes one end-to-end submit attempt for a specific date/reason.
 async function attemptDate(page, date, forcedReason = null) {
-  const btn = await openContextMenu(page, date);
-  await selectTimeCorrectionItem(page, btn);
+  await openContextMenu(page, date);
+  await selectTimeCorrectionItem(page);
   await selectReason(page, forcedReason);
   await clickSubmit(page);
 }
+
 // Retries a single reason path before moving to next reason.
 async function attemptReasonWithRetries(page, date, reason, reloadView) {
   for (let attempt = 1; attempt <= ATTEMPTS_PER_REASON; attempt++) {
@@ -80,13 +90,15 @@ async function attemptReasonWithRetries(page, date, reason, reloadView) {
     } catch (err) {
       console.warn(`   ⚠️ Attempt ${attempt} failed (reason: ${reason}): ${err.message}`);
       await page.screenshot({ path: buildErrorScreenshotName(date, reason, attempt) });
-      try { await page.keyboard.press("Escape"); } catch (_) {}
+      // Close the panel properly (Escape does not close the slide-in panel).
+      await closePanelIfOpen(page);
       await sleep(retryDelayMs(attempt));
     }
   }
   return false;
 }
-// Verifies list-view outcome; failure advances to next reason.
+
+// Verifies list-view outcome after a reload; failure advances to next reason.
 async function verifyReasonAttempt(page, date, reason, submitted) {
   if (!submitted) {
     console.warn(`   ⚠️ Submit flow never completed for reason "${reason}". Trying next reason...`);
@@ -98,35 +110,47 @@ async function verifyReasonAttempt(page, date, reason, submitted) {
   console.warn(`   ⚠️ Verification failed with reason "${reason}". Trying next reason...`);
   return false;
 }
+
 async function processDate(page, date, reloadView, outdoorDutyDates) {
   console.log(`\n📝 Processing: ${date}`);
   const reasons = buildReasonPriorityForDate(date, outdoorDutyDates, getReasonPriority());
   if (outdoorDutyDates.has(date)) {
     console.log(`   🌤️ Outdoor Duty CSV match found. Prioritizing Outdoor Duty for ${date}.`);
   }
+
   for (let rIdx = 0; rIdx < reasons.length; rIdx++) {
     const reason = reasons[rIdx];
     console.log(`   🧾 Trying reason (${rIdx + 1}/${reasons.length}): ${reason}`);
+
     const submitted = await attemptReasonWithRetries(page, date, reason, reloadView);
+
+    // Always reload before verification to get fresh list-view state.
     await reloadView();
     const done = await verifyReasonAttempt(page, date, reason, submitted);
     if (done) return true;
+    // Only reload again between reasons (not after the last one — processDate caller handles it).
+    if (rIdx < reasons.length - 1) await reloadView();
   }
+
   console.warn(`   ❌ All reasons exhausted for ${date}`);
   return false;
 }
+
 // Public entrypoint for attendance regularization.
 async function regularizeAttendance(page) {
   const outdoorDutyDates = loadOutdoorDutyDates();
   const monthContexts = buildMonthContexts(new Date());
   const overall = { succeeded: [], failed: [] };
+
   for (const monthContext of monthContexts) {
     const results = await runMonthContext(page, monthContext, outdoorDutyDates);
     overall.succeeded.push(...results.succeeded.map(d => `${d} (${monthContext})`));
     overall.failed.push(...results.failed.map(d => `${d} (${monthContext})`));
   }
+
   logOverallSummary(overall);
   await page.screenshot({ path: "regularization_result.png" });
   return overall;
 }
+
 module.exports = { regularizeAttendance };
