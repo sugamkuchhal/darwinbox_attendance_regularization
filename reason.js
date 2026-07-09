@@ -4,7 +4,6 @@ const { takeStepScreenshot } = require("./reporting");
 const {
   DEFAULT_REASON_PRIORITY,
   REASON_OPTION_WAIT_MS,
-  REASON_OPTION_CLICK_MS,
   REASON_UI_SLEEP_MS,
 } = require("./attendance-constants");
 
@@ -39,17 +38,37 @@ async function getReasonDropdownBox(page) {
   });
 }
 
+// Wait for the reason dropdown panel to open and have items, then click the
+// first matching option.
+// DOM path (confirmed via live inspection):
+//   dbx-ds-modal.shadowRoot → dbx-dropdown-panel.shadowRoot → dbx-dropdown-simple-item
+//   item.shadowRoot.textContent gives the visible label.
 async function chooseReasonOption(page, reasonChoices) {
-  // Scoped to the panel — avoids matching "Time Correction" in status badges.
-  const panel = page.locator("app-request-attendance");
+  await page.waitForFunction(() => {
+    const modal = document.querySelector("dbx-ds-modal");
+    const panel = modal?.shadowRoot?.querySelector("dbx-dropdown-panel");
+    const items = panel?.shadowRoot?.querySelectorAll("dbx-dropdown-simple-item");
+    return items && items.length > 0;
+  }, { timeout: REASON_OPTION_WAIT_MS });
+
   for (const reason of reasonChoices) {
-    try {
-      const option = panel.getByText(reason, { exact: true }).first();
-      await option.waitFor({ state: "visible", timeout: REASON_OPTION_WAIT_MS });
-      await option.click({ timeout: REASON_OPTION_CLICK_MS });
-      return reason;
-    } catch (_) {}
+    const clicked = await page.evaluate((targetReason) => {
+      const modal = document.querySelector("dbx-ds-modal");
+      const panel = modal?.shadowRoot?.querySelector("dbx-dropdown-panel");
+      const items = panel?.shadowRoot?.querySelectorAll("dbx-dropdown-simple-item") || [];
+      for (const item of items) {
+        const text = (item.shadowRoot?.textContent || item.textContent || "").trim();
+        if (text === targetReason) {
+          item.click();
+          return true;
+        }
+      }
+      return false;
+    }, reason);
+
+    if (clicked) return reason;
   }
+
   throw new Error(`No reason option visible. Tried: ${reasonChoices.join(", ")}`);
 }
 
@@ -62,26 +81,10 @@ async function selectReason(page, forcedReason = null) {
   }
 
   const { x, y, width, height } = result.box;
-  const cx = x + width / 2;
-  const cy = y + height / 2;
-
-  // Single click to open the dropdown, then wait for an option to become visible
-  // before attempting to select — replaces the fragile click→Escape→click dance.
-  await page.mouse.click(cx, cy);
+  await page.mouse.click(x + width / 2, y + height / 2);
   await sleep(REASON_UI_SLEEP_MS);
 
   const reasonChoices = forcedReason ? [forcedReason] : getReasonPriority();
-
-  // If the dropdown didn't open on the first click (e.g. component not ready),
-  // one retry is enough — avoid overcomplicating the happy path.
-  const panel = page.locator("app-request-attendance");
-  const firstOption = panel.getByText(reasonChoices[0], { exact: true }).first();
-  const opened = await firstOption.isVisible().catch(() => false);
-  if (!opened) {
-    await page.mouse.click(cx, cy);
-    await sleep(REASON_UI_SLEEP_MS);
-  }
-
   const chosenReason = await chooseReasonOption(page, reasonChoices);
   await sleep(REASON_UI_SLEEP_MS);
   await takeStepScreenshot(page, "step_5_option_clicked.png");
