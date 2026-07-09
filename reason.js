@@ -42,7 +42,9 @@ async function chooseReasonOption(page, reasonChoices) {
   await panel.waitFor({ state: 'visible', timeout: REASON_OPTION_WAIT_MS });
 
   for (const reason of reasonChoices) {
-    const option = panel.getByText(reason, { exact: true });
+    // .first() guards against strict-mode errors if multiple shadow DOM nodes
+    // (span, item, panel) all expose the same text content.
+    const option = panel.getByText(reason, { exact: true }).first();
     if (await option.isVisible().catch(() => false)) {
       await option.click();
       return reason;
