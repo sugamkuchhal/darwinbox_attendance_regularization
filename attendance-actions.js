@@ -43,15 +43,13 @@ async function selectTimeCorrectionItem(page) {
   if (!clicked) throw new Error("Time Correction menu item not found in DOM");
   console.log(`   ✅ Clicked Time Correction`);
 
-  // Wait for both dropdowns to exist AND be hydrated (Stencil's ready state).
-  // "hydrated" means the component has finished initialising and responds to clicks.
-  // Checking only for existence caused attempt-1 failures where the dropdown click
-  // fired before Stencil was ready, leaving the panel hidden for the full timeout.
+  // Wait for the modal and both dropdowns to appear in the DOM.
+  // "hydrated" was tested live and never appears on these elements (they are Angular-wrapped,
+  // not pure Stencil) — waiting for it caused a guaranteed 15s timeout on every attempt.
   await page.waitForFunction(() => {
     const modal = document.querySelector("dbx-ds-modal");
     if (!modal) return false;
-    const dropdowns = [...modal.querySelectorAll("dbx-ds-dropdown")];
-    return dropdowns.length >= 2 && dropdowns.every(d => d.classList.contains("hydrated"));
+    return modal.querySelectorAll("dbx-ds-dropdown").length >= 2;
   }, undefined, { timeout: MODAL_OPEN_TIMEOUT_MS });
   console.log(`   ✅ Panel ready`);
 }

@@ -12,9 +12,9 @@ function getReasonPriority() {
   return raw.split(",").map(s => s.trim()).filter(Boolean);
 }
 
-// Click the reason dropdown to open it.
-// Playwright auto-scrolls the element into view and dispatches real pointer events,
-// so no getBoundingClientRect or coordinate math is needed.
+// Click the reason dropdown and verify the panel becomes visible.
+// The component becomes responsive some ms after appearing in DOM — no class signals this.
+// We retry the click (up to 5 times, 1s apart) until dbx-dropdown-panel is visible.
 async function openReasonDropdown(page) {
   // dbx-ds-dropdown is in the light DOM of dbx-ds-modal — standard CSS selector works.
   let dropdown = page.locator('dbx-ds-modal dbx-ds-dropdown[data-scroll-id="reason"]');
@@ -25,7 +25,16 @@ async function openReasonDropdown(page) {
   }
 
   await dropdown.scrollIntoViewIfNeeded();
-  await dropdown.click({ timeout: REASON_OPTION_WAIT_MS });
+
+  const panel = page.locator('dbx-dropdown-panel');
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    await dropdown.click({ timeout: REASON_OPTION_WAIT_MS });
+    const visible = await panel.isVisible().catch(() => false);
+    if (visible) return;
+    console.log(`   ⏳ Reason panel not yet visible (attempt ${attempt}/5), retrying in 1s…`);
+    await sleep(1000);
+  }
+  throw new Error("Reason dropdown panel never became visible after 5 click attempts");
 }
 
 // Wait for the dropdown panel and select the first matching reason option.
