@@ -117,7 +117,11 @@ async function activateListView(page) {
 }
 
 async function reloadAttendancePage(page) {
-  await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "networkidle" });
+  // Use "domcontentloaded" instead of "networkidle" — Darwinbox's SPA keeps background
+  // XHR/WebSocket connections open indefinitely, so "networkidle" frequently times out.
+  // We wait for actual content (attendance date rows) to appear instead.
+  await page.goto(`${DARWINBOX_URL}/ms/time/${EMPLOYEE_ID}/attendance`, { waitUntil: "domcontentloaded" });
+  await waitForAttendanceDates(page, 20000).catch(() => {});
   await activateListView(page);
 }
 
@@ -146,7 +150,7 @@ async function clickPreviousMonth(page) {
       continue;
     }
 
-    await page.waitForLoadState("networkidle", { timeout: 3000 }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {});
 
     if (await waitForPreviousMonth(page, expectedPreviousMonth)) {
       await sleep(500);
