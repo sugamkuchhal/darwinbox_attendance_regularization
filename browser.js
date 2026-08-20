@@ -1,6 +1,6 @@
 const { chromium } = require("playwright");
 const { DARWINBOX_URL, USERNAME, PASSWORD } = require("./config");
-const { sleep } = require("./utils");
+const { sleep, redactUrl } = require("./utils");
 const { handleMFA, getTotpCodes } = require("./mfa");
 
 // ─── Browser setup ────────────────────────────────────────────────────────────
@@ -139,17 +139,6 @@ async function handleStaySignedIn(page) {
   } catch (_) {}
 }
 
-// Logs/error messages should never include query strings — some Microsoft SSO
-// redirects carry session/state tokens as URL params, and these strings end up
-// in Actions logs (and, if the repo is ever public, in publicly visible logs).
-function redactUrl(rawUrl) {
-  try {
-    const u = new URL(rawUrl);
-    return `${u.origin}${u.pathname}`;
-  } catch (_) {
-    return "[unparseable url]";
-  }
-}
 
 async function verifyLogin(page) {
   const url = page.url();
