@@ -48,6 +48,8 @@ jobs:
           SMTP_PASS:         ${{ secrets.SMTP_PASS }}
           SMTP_FROM:         ${{ secrets.SMTP_FROM }}
           REPORT_EMAIL_TO:   ${{ secrets.REPORT_EMAIL_TO }}
+          # Optional: override default reason priority (comma-separated, in order)
+          # DARWINBOX_REASON_PRIORITY: "Forgot To Punch,Outdoor Duty,Work From Home,In / Out Swiping Mistake"
         run: node index.js
 
       # - name: 📸 Upload screenshots (for debugging)
