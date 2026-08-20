@@ -18,7 +18,7 @@ async function launchBrowser() {
 
 async function navigateToLogin(page) {
   console.log("🔐 Navigating to Darwinbox...");
-  await page.goto(`${DARWINBOX_URL}/user/login`, { waitUntil: "networkidle" });
+  await page.goto(`${DARWINBOX_URL}/user/login`, { waitUntil: "domcontentloaded" });
   await sleep(2000);
 }
 
@@ -33,7 +33,7 @@ async function clickSsoButton(page) {
     try {
       await page.click(sel, { timeout: 3000 });
       console.log(`✅ SSO clicked: ${sel}`);
-      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 });
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 });
       await sleep(2000);
       return;
     } catch (_) {}
@@ -46,14 +46,14 @@ async function enterCredentials(page) {
   await page.fill('input[type="email"], input[name="loginfmt"]', USERNAME);
   await sleep(500);
   await page.click('input[type="submit"], button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 }).catch(() => {});
+  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
   await sleep(2000);
 
   console.log("🔑 Entering password...");
   await page.fill('input[type="password"], input[name="passwd"]', PASSWORD);
   await sleep(500);
   await page.click('input[type="submit"], button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
   await sleep(2000);
 }
 
@@ -84,7 +84,7 @@ async function handleMfaIfPresent(page) {
     await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.code);
     await sleep(500);
     await page.click('input[type="submit"], button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
     await sleep(2000);
     const stillOnMicrosoft = page.url().includes("login.microsoftonline");
     const stillNeedsCode = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
@@ -98,7 +98,7 @@ async function handleMfaIfPresent(page) {
       await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.retryCode);
       await sleep(500);
       await page.click('input[type="submit"], button[type="submit"]');
-      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 15000 }).catch(() => {});
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
       await sleep(2000);
       return !(page.url().includes("login.microsoftonline") && await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null));
     }
@@ -133,7 +133,7 @@ async function handleMfaIfPresent(page) {
 async function handleStaySignedIn(page) {
   try {
     await page.click('input[value="Yes"], button:has-text("Yes")', { timeout: 5000 });
-    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 10000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
     await sleep(2000);
     console.log("✅ Clicked 'Stay signed in'");
   } catch (_) {}
