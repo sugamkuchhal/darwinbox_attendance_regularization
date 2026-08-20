@@ -75,6 +75,11 @@ async function closePanelIfOpen(page) {
 
 async function clickSubmit(page) {
   try {
+    // Diagnostic: check if Playwright locator can find the Submit button via shadow DOM.
+    const locator = page.locator('dbx-ds-modal .footer dbx-ds-button').filter({ hasText: 'Submit' });
+    const locatorCount = await locator.count();
+    console.log(`   🔍 Diagnostic: Playwright locator found ${locatorCount} Submit button(s)`);
+
     // Find the Submit button by text in the modal shadow root —
     // more robust than selecting by last index.
     const box = await page.evaluate(() => {
