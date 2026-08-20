@@ -1,7 +1,7 @@
 // Loads and validates repo-configured Outdoor Duty dates.
 const fs   = require("fs");
 const path = require("path");
-const { DEFAULT_REASON_PRIORITY } = require("./attendance-constants");
+const { getReasonPriority } = require("./reason");
 
 const OUTDOOR_DUTY_REASON    = "Outdoor Duty";
 const OUTDOOR_DUTY_DATES_CSV = path.join(__dirname, "outdoor-duty-dates.csv");
@@ -48,15 +48,9 @@ function loadOutdoorDutyDates(csvPath = OUTDOOR_DUTY_DATES_CSV) {
   return dates;
 }
 
-// Reads reason priority from env (same logic as getReasonPriority in reason.js)
-// so callers don't need to import and pass it in separately.
-function getBaseReasons() {
-  const raw = process.env.DARWINBOX_REASON_PRIORITY || DEFAULT_REASON_PRIORITY;
-  return raw.split(",").map(s => s.trim()).filter(Boolean);
-}
 
 function buildReasonPriorityForDate(date, outdoorDutyDates) {
-  const baseReasons = getBaseReasons();
+  const baseReasons = getReasonPriority();
   if (outdoorDutyDates.size === 0 || !outdoorDutyDates.has(date)) return baseReasons;
   const remaining = baseReasons.filter(r => r.trim().toLowerCase() !== OUTDOOR_DUTY_REASON.toLowerCase());
   return [OUTDOOR_DUTY_REASON, ...remaining];
