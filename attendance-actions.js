@@ -75,26 +75,9 @@ async function closePanelIfOpen(page) {
 
 async function clickSubmit(page) {
   try {
-    // Diagnostic: check if Playwright locator can find the Submit button via shadow DOM.
-    const locator = page.locator('dbx-ds-modal .footer dbx-ds-button').filter({ hasText: 'Submit' });
-    const locatorCount = await locator.count();
-    console.log(`   🔍 Diagnostic: Playwright locator found ${locatorCount} Submit button(s)`);
-
-    // Find the Submit button by text in the modal shadow root —
-    // more robust than selecting by last index.
-    const box = await page.evaluate(() => {
-      const modal = document.querySelector("dbx-ds-modal");
-      if (!modal || !modal.shadowRoot) throw new Error("modal shadow root not found");
-      const btns = [...modal.shadowRoot.querySelectorAll(".footer dbx-ds-button")];
-      const submitBtn = btns.find(b => {
-        const inner = b.shadowRoot?.querySelector("button");
-        return (inner?.textContent?.trim() || b.textContent?.trim()) === "Submit";
-      });
-      if (!submitBtn) throw new Error("Submit button not found in modal footer");
-      const r = submitBtn.getBoundingClientRect();
-      return { x: r.x, y: r.y, width: r.width, height: r.height };
-    });
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    const submitBtn = page.locator('dbx-ds-modal .footer dbx-ds-button').filter({ hasText: 'Submit' });
+    await submitBtn.waitFor({ state: 'visible', timeout: MODAL_OPEN_TIMEOUT_MS });
+    await submitBtn.click();
     await sleep(UI_SLEEP_SUBMIT_MS);
     await takeStepScreenshot(page, "step_submitted.png", "submitted");
   } catch (err) {
