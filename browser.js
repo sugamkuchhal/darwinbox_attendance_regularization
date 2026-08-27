@@ -46,8 +46,9 @@ async function enterCredentials(page) {
   await page.fill('input[type="email"], input[name="loginfmt"]', USERNAME);
   await sleep(500);
   await page.click('input[type="submit"], button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
-  await sleep(2000);
+  // Microsoft login is SPA-based — email→password is a JS transition, not a navigation.
+  // waitForSelector on the password field is reliable; waitForNavigation is not.
+  await page.waitForSelector('input[type="password"], input[name="passwd"]', { timeout: 15000 });
 
   console.log("🔑 Entering password...");
   await page.fill('input[type="password"], input[name="passwd"]', PASSWORD);
