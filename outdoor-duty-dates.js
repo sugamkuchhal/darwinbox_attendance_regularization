@@ -49,8 +49,8 @@ function loadOutdoorDutyDates(csvPath = OUTDOOR_DUTY_DATES_CSV) {
 }
 
 
-function buildReasonPriorityForDate(date, outdoorDutyDates) {
-  const baseReasons = getReasonPriority();
+function buildReasonPriorityForDate(date, outdoorDutyDates, base = null) {
+  const baseReasons = base ?? getReasonPriority();
   if (outdoorDutyDates.size === 0 || !outdoorDutyDates.has(date)) return baseReasons;
   const remaining = baseReasons.filter(r => r.trim().toLowerCase() !== OUTDOOR_DUTY_REASON.toLowerCase());
   return [OUTDOOR_DUTY_REASON, ...remaining];
