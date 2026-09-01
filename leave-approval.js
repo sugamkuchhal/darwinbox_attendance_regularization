@@ -5,54 +5,65 @@ const { DARWINBOX_URL } = require("./config");
 const { sleep } = require("./utils");
 const { takeStepScreenshot } = require("./reporting");
 
-const LEAVE_REQUESTS_TABLE = "table#core_taskbox_tasks";
+const LEAVE_REQUESTS_TABLE  = "table#core_taskbox_tasks";
 const APPROVE_BUTTON_SELECTOR = 'DBX-DS-BUTTON[data-action="leave_app_rej_approve"]';
 const TABLE_LOAD_TIMEOUT_MS = 15000;
+const TAB_SWITCH_SLEEP_MS   = 3000;
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
-async function loadLeaveRequestsPage(page) {
-  await page.goto(`${DARWINBOX_URL}/tasksApi/GetTasks`, { waitUntil: "domcontentloaded" });
+async function waitForTable(page) {
   await page.waitForSelector(LEAVE_REQUESTS_TABLE, { timeout: TABLE_LOAD_TIMEOUT_MS });
+}
 
-  const isLeaveTab = await page.evaluate(() =>
-    document.querySelector("#task_category_id")?.value === "leave_task"
-  );
-
-  if (!isLeaveTab) {
-    console.log("   ↩️  Not on Leave Requests tab — clicking it...");
-    const clicked = await page.evaluate(() => {
-      // The tab group uses nested shadow DOMs — traverse to find "Leave Requests" text.
-      function searchShadow(root) {
-        for (const el of root.querySelectorAll("*")) {
-          if (el.shadowRoot && searchShadow(el.shadowRoot)) return true;
-          if (el.children.length === 0 && el.textContent.trim() === "Leave Requests") {
-            // Walk up to find a clickable tab element
-            let cur = el;
-            while (cur) {
-              if (cur.tagName === "DBX-DS-TAB" || cur.tagName === "A" || cur.getAttribute?.("role") === "tab") {
-                cur.click();
-                return true;
-              }
-              cur = cur.parentElement || cur.getRootNode()?.host;
+async function tryClickLeaveTab(page) {
+  return page.evaluate(() => {
+    // The tab group uses nested shadow DOMs — traverse to find "Leave Requests" text.
+    function searchShadow(root) {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot && searchShadow(el.shadowRoot)) return true;
+        if (el.children.length === 0 && el.textContent.trim() === "Leave Requests") {
+          let cur = el;
+          while (cur) {
+            const tag = cur.tagName;
+            if (tag === "DBX-DS-TAB" || tag === "A" || cur.getAttribute?.("role") === "tab") {
+              cur.click();
+              return true;
             }
+            cur = cur.parentElement || cur.getRootNode?.()?.host;
           }
         }
-        return false;
       }
-      const tabGroup = document.querySelector("#dbx_vertical_tabs");
-      return tabGroup?.shadowRoot ? searchShadow(tabGroup.shadowRoot) : false;
-    });
+      return false;
+    }
+    const tabGroup = document.querySelector("#dbx_vertical_tabs");
+    return tabGroup?.shadowRoot ? searchShadow(tabGroup.shadowRoot) : false;
+  });
+}
 
-    if (!clicked) throw new Error("Could not find or click the Leave Requests tab");
+async function loadLeaveRequestsPage(page) {
+  await page.goto(`${DARWINBOX_URL}/tasksApi/GetTasks`, { waitUntil: "domcontentloaded" });
+  await waitForTable(page);
 
-    // Wait until the category switches to leave_task
-    await page.waitForFunction(
-      () => document.querySelector("#task_category_id")?.value === "leave_task",
-      { timeout: TABLE_LOAD_TIMEOUT_MS }
-    );
-    console.log("   ✅ Leave Requests tab active");
-  }
+  // Primary check: is Leave Requests tab already active?
+  const isLeaveTab = await page.evaluate(
+    () => document.querySelector("#task_category_id")?.value === "leave_task"
+  );
+
+  if (isLeaveTab) return;
+
+  console.log("   ↩️  Not on Leave Requests tab — clicking it...");
+  const clicked = await tryClickLeaveTab(page);
+  if (!clicked) throw new Error("Could not find the Leave Requests tab in shadow DOM");
+
+  // After tab click, reload so the server renders the correct tab content.
+  await sleep(TAB_SWITCH_SLEEP_MS);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForTable(page);
+
+  // Confirm by checking approve buttons are now present (or none pending).
+  const count = await countApproveButtons(page);
+  console.log(`   ✅ Leave Requests tab loaded — ${count} pending request(s)`);
 }
 
 // ─── Approval loop ────────────────────────────────────────────────────────────
@@ -65,7 +76,6 @@ async function countApproveButtons(page) {
 }
 
 async function clickFirstApproveButton(page) {
-  // Use Playwright locator — auto-pierces shadow DOM where possible.
   const btn = page.locator(APPROVE_BUTTON_SELECTOR).first();
   await btn.waitFor({ state: "visible", timeout: 5000 });
   await btn.click();
@@ -87,34 +97,33 @@ async function approveAllLeaveRequests(page) {
     const countBefore = await countApproveButtons(page);
     if (countBefore === 0) break;
 
-    console.log(`\n   🖊️ Approving request (${countBefore} remaining)...`);
+    console.log(`\n   🖊️  Approving request (${countBefore} remaining)...`);
 
     try {
       await clickFirstApproveButton(page);
     } catch (err) {
       console.warn(`   ⚠️ Click failed: ${err.message}`);
-      await takeStepScreenshot(page, `leave_approve_click_failed.png`, "click failed", { log: true });
+      await takeStepScreenshot(page, "leave_approve_click_failed.png", "click failed", { log: true });
       results.failed++;
       break;
     }
 
-    // Wait for the action to process, then reload to get fresh state.
+    // Allow the request to process, then reload for clean DOM state.
     await sleep(2000);
-
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForSelector(LEAVE_REQUESTS_TABLE, { timeout: TABLE_LOAD_TIMEOUT_MS });
+    await waitForTable(page);
 
     const countAfter = await countApproveButtons(page);
 
     if (countAfter < countBefore) {
-      console.log(`   ✅ Approved (${countBefore - countAfter} row(s) removed)`);
-      results.approved += countBefore - countAfter;
+      const delta = countBefore - countAfter;
+      console.log(`   ✅ Approved (${delta} row(s) removed, ${countAfter} remaining)`);
+      results.approved += delta;
     } else {
-      // Count didn't decrease — request was already processed or rejected by server.
-      console.warn(`   ⚠️ Row count unchanged after approval attempt — skipping`);
-      await takeStepScreenshot(page, `leave_approve_unchanged.png`, "count unchanged", { log: true });
+      // Row count unchanged — server rejected or request already processed.
+      console.warn("   ⚠️ Row count unchanged after approval attempt — stopping");
+      await takeStepScreenshot(page, "leave_approve_unchanged.png", "count unchanged", { log: true });
       results.failed++;
-      // Safety: if count stays same across attempts, stop to avoid infinite loop.
       break;
     }
   }
