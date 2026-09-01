@@ -56,7 +56,7 @@ async function ensureLeaveRequestsTab(page) {
   if (!(await isOnLeaveTab(page))) {
     console.log("   ↩️  Not on Leave Requests tab — clicking it...");
     const clicked = await tryClickLeaveTab(page);
-    if (!clicked) throw new Error("Could not find the Leave Requests tab in shadow DOM");
+    if (!clicked) return false; // Tab gone = 0 pending requests remaining
 
     // #task_category_id updates immediately on tab click (before data XHR).
     await page.waitForFunction(
@@ -74,6 +74,7 @@ async function ensureLeaveRequestsTab(page) {
     APPROVE_BUTTON_SELECTOR,
     { timeout: APPROVE_RENDER_TIMEOUT_MS }
   ).catch(() => {});
+  return true;
 }
 
 // ─── Approval loop ────────────────────────────────────────────────────────────
@@ -86,8 +87,22 @@ async function clickFirstApproveButton(page) {
 
 async function approveAllLeaveRequests(page) {
   await page.goto(`${DARWINBOX_URL}/tasksApi/GetTasks`, { waitUntil: "domcontentloaded" });
-  await waitForTable(page);
-  await ensureLeaveRequestsTab(page);
+
+  // If the Task Box has no entries at all, the table may not render.
+  const tableExists = await page.waitForSelector(LEAVE_REQUESTS_TABLE, { timeout: TABLE_LOAD_TIMEOUT_MS })
+    .then(() => true)
+    .catch(() => false);
+  if (!tableExists) {
+    console.log("✅ Task Box empty — no leave requests to approve");
+    return { approved: 0, failed: 0 };
+  }
+
+  // If the Leave Requests tab is absent (no pending requests), exit cleanly.
+  const onLeaveTab = await ensureLeaveRequestsTab(page);
+  if (!onLeaveTab) {
+    console.log("✅ No Leave Requests tab — no pending requests");
+    return { approved: 0, failed: 0 };
+  }
 
   const initialCount = await countApproveButtons(page);
   if (initialCount === 0) {
@@ -116,9 +131,27 @@ async function approveAllLeaveRequests(page) {
     // Allow the request to process, then reload for a clean DOM state.
     await sleep(2000);
     await page.reload({ waitUntil: "domcontentloaded" });
-    await waitForTable(page);
-    // Re-ensure Leave Requests tab after reload (reload may land on a different tab).
-    await ensureLeaveRequestsTab(page);
+
+    // After the LAST approval, Darwinbox removes the Leave Requests tab entirely
+    // (0 pending = tab gone from sidebar). Guard both the table wait and tab switch.
+    const tableFound = await page.waitForSelector(LEAVE_REQUESTS_TABLE, { timeout: TABLE_LOAD_TIMEOUT_MS })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!tableFound) {
+      // Page navigated away from Task Box entirely — last approval succeeded.
+      console.log("   ✅ Approved (Task Box exited — all requests processed)");
+      results.approved++;
+      break;
+    }
+
+    const onLeaveTab = await ensureLeaveRequestsTab(page);
+    if (!onLeaveTab) {
+      // Leave Requests tab gone — last approval succeeded.
+      console.log("   ✅ Approved (Leave Requests tab removed — 0 remaining)");
+      results.approved++;
+      break;
+    }
 
     const countAfter = await countApproveButtons(page);
 

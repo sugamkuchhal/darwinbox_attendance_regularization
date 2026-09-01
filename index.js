@@ -2,6 +2,7 @@
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
 const { regularizeAttendance } = require("./attendance-orchestrator");
+const { approveAllLeaveRequests } = require("./leave-approval");
 const { sendRegularizationEmail } = require("./email");
 
 async function run() {
@@ -15,6 +16,7 @@ async function run() {
   try {
     await login(page);
     const summary = await regularizeAttendance(page);
+    await approveAllLeaveRequests(page);
     await sendRegularizationEmail(summary);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
