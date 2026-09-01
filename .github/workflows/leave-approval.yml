@@ -1,0 +1,50 @@
+name: Darwinbox Leave Approval
+
+on:
+  # schedule:
+    ## Runs daily at 10:15 AM IST (4:45 AM UTC) — after attendance regularization.
+    #- cron: "45 4 * * *"
+
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  approve-leaves:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: 🎭 Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: 🤖 Approve leave requests
+        env:
+          DARWINBOX_URL:      ${{ secrets.DARWINBOX_URL }}
+          DARWINBOX_USERNAME: ${{ secrets.DARWINBOX_USERNAME }}
+          DARWINBOX_PASSWORD: ${{ secrets.DARWINBOX_PASSWORD }}
+          DARWINBOX_TOTP_SECRET: ${{ secrets.DARWINBOX_TOTP_SECRET }}
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:  ${{ github.repository }}
+        run: node leave-approval-run.js
+
+      # - name: 📸 Upload screenshots (for debugging)
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: leave-screenshots
+      #     path: "*.png"
+      #     retention-days: 7
