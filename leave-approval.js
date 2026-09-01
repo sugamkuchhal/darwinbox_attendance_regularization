@@ -5,68 +5,32 @@ const { DARWINBOX_URL } = require("./config");
 const { sleep } = require("./utils");
 const { takeStepScreenshot } = require("./reporting");
 
-const LEAVE_REQUESTS_TABLE  = "table#core_taskbox_tasks";
+const LEAVE_REQUESTS_TABLE    = "table#core_taskbox_tasks";
 const APPROVE_BUTTON_SELECTOR = 'DBX-DS-BUTTON[data-action="leave_app_rej_approve"]';
-const TABLE_LOAD_TIMEOUT_MS = 15000;
-const TAB_SWITCH_SLEEP_MS   = 3000;
+const TABLE_LOAD_TIMEOUT_MS   = 15000;
+const TAB_SWITCH_TIMEOUT_MS   = 10000;
+const ROW_LOAD_TIMEOUT_MS     = 10000;
 
-// ─── Navigation ───────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function waitForTable(page) {
   await page.waitForSelector(LEAVE_REQUESTS_TABLE, { timeout: TABLE_LOAD_TIMEOUT_MS });
 }
 
-async function tryClickLeaveTab(page) {
-  return page.evaluate(() => {
-    // The tab group uses nested shadow DOMs — traverse to find "Leave Requests" text.
-    function searchShadow(root) {
-      for (const el of root.querySelectorAll("*")) {
-        if (el.shadowRoot && searchShadow(el.shadowRoot)) return true;
-        if (el.children.length === 0 && el.textContent.trim() === "Leave Requests") {
-          let cur = el;
-          while (cur) {
-            const tag = cur.tagName;
-            if (tag === "DBX-DS-TAB" || tag === "A" || cur.getAttribute?.("role") === "tab") {
-              cur.click();
-              return true;
-            }
-            cur = cur.parentElement || cur.getRootNode?.()?.host;
-          }
-        }
-      }
-      return false;
-    }
-    const tabGroup = document.querySelector("#dbx_vertical_tabs");
-    return tabGroup?.shadowRoot ? searchShadow(tabGroup.shadowRoot) : false;
-  });
+// After the table element appears, the SPA still populates rows asynchronously.
+async function waitForTableRows(page) {
+  await page.waitForFunction(
+    (sel) => !!document.querySelector(sel + " tbody"),
+    LEAVE_REQUESTS_TABLE,
+    { timeout: ROW_LOAD_TIMEOUT_MS }
+  ).catch(() => {}); // graceful — 0-row tbody is fine
 }
 
-async function loadLeaveRequestsPage(page) {
-  await page.goto(`${DARWINBOX_URL}/tasksApi/GetTasks`, { waitUntil: "domcontentloaded" });
-  await waitForTable(page);
-
-  // Primary check: is Leave Requests tab already active?
-  const isLeaveTab = await page.evaluate(
+async function isOnLeaveTab(page) {
+  return page.evaluate(
     () => document.querySelector("#task_category_id")?.value === "leave_task"
   );
-
-  if (isLeaveTab) return;
-
-  console.log("   ↩️  Not on Leave Requests tab — clicking it...");
-  const clicked = await tryClickLeaveTab(page);
-  if (!clicked) throw new Error("Could not find the Leave Requests tab in shadow DOM");
-
-  // After tab click, reload so the server renders the correct tab content.
-  await sleep(TAB_SWITCH_SLEEP_MS);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await waitForTable(page);
-
-  // Confirm by checking approve buttons are now present (or none pending).
-  const count = await countApproveButtons(page);
-  console.log(`   ✅ Leave Requests tab loaded — ${count} pending request(s)`);
 }
-
-// ─── Approval loop ────────────────────────────────────────────────────────────
 
 async function countApproveButtons(page) {
   return page.evaluate(
@@ -74,6 +38,50 @@ async function countApproveButtons(page) {
     APPROVE_BUTTON_SELECTOR
   );
 }
+
+// ─── Tab navigation ───────────────────────────────────────────────────────────
+
+// Click the Leave Requests tab by finding the div.tab-container whose text
+// includes "Leave Requests" inside each DBX-DS-TAB's shadow root.
+// Clicking div.tab-container (not the outer custom element) triggers the SPA switch.
+async function tryClickLeaveTab(page) {
+  return page.evaluate(() => {
+    const tabGroup = document.querySelector("#dbx_vertical_tabs");
+    if (!tabGroup?.shadowRoot) return false;
+    const tabs = [...tabGroup.shadowRoot.querySelectorAll("DBX-DS-TAB")];
+    for (const tab of tabs) {
+      const container = tab.shadowRoot?.querySelector("div.tab-container");
+      if (container?.textContent?.trim().includes("Leave Requests")) {
+        container.click();
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+async function loadLeaveRequestsPage(page) {
+  await page.goto(`${DARWINBOX_URL}/tasksApi/GetTasks`, { waitUntil: "domcontentloaded" });
+  await waitForTable(page);
+  await waitForTableRows(page);
+
+  if (await isOnLeaveTab(page)) return;
+
+  console.log("   ↩️  Not on Leave Requests tab — clicking it...");
+  const clicked = await tryClickLeaveTab(page);
+  if (!clicked) throw new Error("Could not find the Leave Requests tab in shadow DOM");
+
+  // SPA switches in-place — wait for category indicator to update (no reload needed).
+  await page.waitForFunction(
+    () => document.querySelector("#task_category_id")?.value === "leave_task",
+    null,
+    { timeout: TAB_SWITCH_TIMEOUT_MS }
+  );
+  await waitForTableRows(page);
+  console.log("   ✅ Leave Requests tab active");
+}
+
+// ─── Approval loop ────────────────────────────────────────────────────────────
 
 async function clickFirstApproveButton(page) {
   const btn = page.locator(APPROVE_BUTTON_SELECTOR).first();
@@ -112,6 +120,7 @@ async function approveAllLeaveRequests(page) {
     await sleep(2000);
     await page.reload({ waitUntil: "domcontentloaded" });
     await waitForTable(page);
+    await waitForTableRows(page);
 
     const countAfter = await countApproveButtons(page);
 
@@ -120,7 +129,6 @@ async function approveAllLeaveRequests(page) {
       console.log(`   ✅ Approved (${delta} row(s) removed, ${countAfter} remaining)`);
       results.approved += delta;
     } else {
-      // Row count unchanged — server rejected or request already processed.
       console.warn("   ⚠️ Row count unchanged after approval attempt — stopping");
       await takeStepScreenshot(page, "leave_approve_unchanged.png", "count unchanged", { log: true });
       results.failed++;
