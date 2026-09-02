@@ -19,7 +19,15 @@ function buildSubject(pendingCount) {
   return `${prefix} Darwinbox regularization summary (${date})`;
 }
 
-async function sendRegularizationEmail(summary, taskApprovals = null) {
+function monthName(m) {
+  return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1] ?? m;
+}
+
+function fmtAmount(n) {
+  return "₹" + Number(n).toLocaleString("en-IN");
+}
+
+async function sendRegularizationEmail(summary, taskApprovals = null, consultantApprovals = null) {
   const recipient = getRecipient();
   if (!recipient) {
     console.log("⚠️ Email skipped: no valid recipient in DARWINBOX_USERNAME/REPORT_EMAIL_TO");
@@ -50,6 +58,7 @@ async function sendRegularizationEmail(summary, taskApprovals = null) {
   });
 
   const subject = buildSubject(pendingCount);
+
   const leaveLines = taskApprovals?.leave
     ? taskApprovals.leave.approved === 0
       ? ["- none"]
@@ -61,6 +70,18 @@ async function sendRegularizationEmail(summary, taskApprovals = null) {
       ? ["- none"]
       : taskApprovals.timeCorrection.records.map((r) => `- ${r}`)
     : ["- not run"];
+
+  const consultantLines = consultantApprovals?.consultants?.approved > 0
+    ? consultantApprovals.consultants.records.map(
+        (r) => `- ${r.name} (Emp ${r.empNo}) | Payment ID ${r.paymentID} | ${monthName(r.month)} ${r.year} | Net ${fmtAmount(r.netAmount)}`
+      )
+    : ["- none"];
+
+  const internLines = consultantApprovals?.interns?.approved > 0
+    ? consultantApprovals.interns.records.map(
+        (r) => `- ${r.name} (Emp ${r.empNo}) | Payment ID ${r.paymentID} | ${monthName(r.month)} ${r.year} | Net ${fmtAmount(r.netAmount)}`
+      )
+    : ["- none"];
 
   const text = [
     `Hello,`,
@@ -78,6 +99,12 @@ async function sendRegularizationEmail(summary, taskApprovals = null) {
     ``,
     `Time corrections approved (${taskApprovals?.timeCorrection?.approved ?? 0}):`,
     tcLines.join("\n"),
+    ``,
+    `Consultant payments approved (${consultantApprovals?.consultants?.approved ?? "not run"}):`,
+    consultantLines.join("\n"),
+    ``,
+    `Intern payments approved (${consultantApprovals?.interns?.approved ?? "not run"}):`,
+    internLines.join("\n"),
     ``,
     `Regards,`,
     `Darwinbox Automation`
