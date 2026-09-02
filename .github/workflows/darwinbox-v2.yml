@@ -1,0 +1,63 @@
+name: Darwinbox Automation v2
+
+on:
+  # schedule:
+    ## Runs daily at 10:00 AM IST (4:30 AM UTC).
+    #- cron: "30 4 * * *"
+
+  workflow_dispatch: # Manual trigger from GitHub UI
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  automate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: 🎭 Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: 🎭 Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium --with-deps
+
+      - name: 🎭 Install Playwright system deps (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: 🤖 Run automation
+        env:
+          DARWINBOX_URL:         ${{ secrets.DARWINBOX_URL }}
+          DARWINBOX_USERNAME:    ${{ secrets.DARWINBOX_USERNAME }}
+          DARWINBOX_PASSWORD:    ${{ secrets.DARWINBOX_PASSWORD }}
+          DARWINBOX_EMPLOYEE_ID: ${{ secrets.DARWINBOX_EMPLOYEE_ID }}
+          DARWINBOX_TOTP_SECRET: ${{ secrets.DARWINBOX_TOTP_SECRET }}
+          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:     ${{ github.repository }}
+          SMTP_HOST:             ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:             ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE:           ${{ secrets.SMTP_SECURE }}
+          SMTP_USER:             ${{ secrets.SMTP_USER }}
+          SMTP_PASS:             ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:             ${{ secrets.SMTP_FROM }}
+          REPORT_EMAIL_TO:       ${{ secrets.REPORT_EMAIL_TO }}
+        run: node index.js
