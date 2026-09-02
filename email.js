@@ -14,9 +14,9 @@ function getRecipient() {
 }
 
 function buildSubject(pendingCount) {
-  const prefix = pendingCount === 0 ? "[ALL GOOD]" : `[${pendingCount} PENDING]`;
+  const prefix = pendingCount === 0 ? "[ALL GOOD]" : "[PENDING]";
   const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  return `${prefix} Darwinbox · ${date}`;
+  return pendingCount === 0 ? `${prefix} Darwinbox · ${date}` : `${prefix} Darwinbox · ${date} (${pendingCount} unresolved)`;
 }
 
 function monthName(m) {
