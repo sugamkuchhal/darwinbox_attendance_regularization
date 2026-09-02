@@ -10,8 +10,34 @@ const DETAIL_LOAD_TIMEOUT_MS = 15000;
 
 async function ensureDashboard(page) {
   await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
-  // If SSO redirect kicks in, wait for it to settle back on the dashboard.
-  await page.waitForSelector("#dvManagerPending", { timeout: DASHBOARD_LOAD_TIMEOUT_MS });
+
+  // ADFS SSO for a new SP redirects through a form-POST chain.
+  // Poll until we land on the dashboard, handling any "Stay signed in?" prompt.
+  const deadline = Date.now() + 60000; // 60s total budget
+
+  while (Date.now() < deadline) {
+    // Already on dashboard?
+    const onDashboard = await page.$("#dvManagerPending").catch(() => null);
+    if (onDashboard) break;
+
+    // "Stay signed in?" — same prompt as Darwinbox login flow
+    const stayBtn = await page
+      .$('input[value="Yes"], button:has-text("Yes")')
+      .catch(() => null);
+    if (stayBtn) {
+      console.log("   🔐 ADFS 'Stay signed in?' — clicking Yes");
+      await stayBtn.click().catch(() => {});
+      await page
+        .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
+        .catch(() => {});
+      continue;
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  // Final authoritative check with a short timeout
+  await page.waitForSelector("#dvManagerPending", { timeout: 10000 });
   console.log("   ✅ Consultant dashboard loaded");
 }
 
