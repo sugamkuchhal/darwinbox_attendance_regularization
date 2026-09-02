@@ -1,4 +1,4 @@
-name: Darwinbox Attendance Regularization
+name: Darwinbox Automation
 
 on:
   # schedule:
@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  regularize:
+  automate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -32,7 +32,7 @@ jobs:
       - name: 🎭 Install Playwright browsers
         run: npx playwright install chromium --with-deps
 
-      - name: 🤖 Run attendance regularization
+      - name: 🤖 Run automation
         env:
           DARWINBOX_URL:      ${{ secrets.DARWINBOX_URL }}
           DARWINBOX_USERNAME: ${{ secrets.DARWINBOX_USERNAME }}

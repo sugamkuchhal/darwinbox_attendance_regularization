@@ -31,7 +31,7 @@ function line(char = "═", len = 40) {
   return char.repeat(len);
 }
 
-async function sendRegularizationEmail(summary, taskApprovals = null, consultantApprovals = null) {
+async function sendSummaryEmail(summary, taskApprovals = null, consultantApprovals = null) {
   const recipient = getRecipient();
   if (!recipient) {
     console.log("⚠️ Email skipped: no valid recipient in DARWINBOX_USERNAME/REPORT_EMAIL_TO");
@@ -132,4 +132,4 @@ async function sendRegularizationEmail(summary, taskApprovals = null, consultant
   }
 }
 
-module.exports = { sendRegularizationEmail };
+module.exports = { sendSummaryEmail };

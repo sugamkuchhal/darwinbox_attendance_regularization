@@ -4,7 +4,7 @@ const { launchBrowser, login } = require("./browser");
 const { regularizeAttendance } = require("./attendance-orchestrator");
 const { approveAllLeaveRequests } = require("./leave-approval");
 const { approveAllConsultants } = require("./consultant-approval");
-const { sendRegularizationEmail } = require("./email");
+const { sendSummaryEmail } = require("./email");
 
 function step(n, total, label) {
   console.log(`\n${"═".repeat(40)}`);
@@ -34,7 +34,7 @@ async function run() {
     const consultantApprovals = await approveAllConsultants(page);
 
     step(5, 5, "Summary Email");
-    await sendRegularizationEmail(summary, taskApprovals, consultantApprovals);
+    await sendSummaryEmail(summary, taskApprovals, consultantApprovals);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
     await page.screenshot({ path: "error_screenshot.png", fullPage: true }).catch(() => {});
