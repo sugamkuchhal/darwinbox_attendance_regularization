@@ -138,11 +138,26 @@ async function approveAllConsultants(page) {
     // Step 1: Navigate to onearvind.com — this triggers the ADFS WIA redirect.
     // httpCredentials in the context auto-responds to the WWW-Authenticate challenge.
     // After auth, ADFS sets the shared .onearvind.com session cookie.
-    console.log("   🔐 Authenticating via onearvind.com (ADFS)...");
+    // Step 1: Navigate to onearvind.com — ADFS will redirect to a forms login page.
+    // (GitHub Actions Linux Chromium is not detected as WIA-capable, so ADFS serves
+    //  an HTML form rather than a Kerberos/NTLM challenge.)
+    console.log("   🔐 Navigating to onearvind.com for ADFS login...");
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
     console.log(`   📍 After onearvind.com: ${cPage.url()} | title: ${await cPage.title()}`);
 
-    // Step 2: Now that the .onearvind.com cookie is set, navigate to the dashboard.
+    // Step 2: If we landed on the ADFS Sign In page, fill the form.
+    if (cPage.url().includes("adfs.arvind.in")) {
+      console.log("   📝 ADFS form detected — filling credentials...");
+      await cPage.waitForSelector("#userNameInput", { timeout: 10000 });
+      await cPage.fill("#userNameInput", USERNAME);
+      await cPage.fill("#passwordInput", PASSWORD);
+      await cPage.click("#submitButton");
+      // Wait for redirect back to onearvind.com
+      await cPage.waitForURL("**/onearvind.com/**", { timeout: 30000 });
+      console.log(`   ✅ ADFS auth complete — now at: ${cPage.url()}`);
+    }
+
+    // Step 3: Navigate to the dashboard — .onearvind.com cookie is now set.
     console.log("   🔐 Navigating to consultant dashboard...");
     await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
     console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
