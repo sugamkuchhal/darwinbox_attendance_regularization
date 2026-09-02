@@ -1,14 +1,29 @@
 // Approves all pending Consultant and Intern payments on consultantmgmt.onearvind.com.
-// Auth: creates a separate browser context that handles the ADFS HTTP auth challenge
-// using Arvind AD credentials (same DARWINBOX_USERNAME / DARWINBOX_PASSWORD).
+//
+// Auth flow (empirically verified):
+//   1. Navigate to onearvind.com → ADFS redirects to forms login (/adfs/ls/)
+//   2. Fill #userNameInput / #passwordInput / #submitButton
+//   3. ADFS sets shared .onearvind.com cookie
+//   4. Navigate to consultantmgmt root → redirects to Manager Dashboard
+//
+// Detail page access:
+//   Direct goto("/Consultant/ConsultantEntry?PaymentID=X") → /Home/UnAuthorized
+//   Click link from dashboard → page loads correctly (server checks referrer/session)
+//   So each approval: reload dashboard → click employee link → read hdnDivID → POST
 
 const { USERNAME, PASSWORD } = require("./config");
 
 const CONSULTANT_BASE = "https://consultantmgmt.onearvind.com";
 const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
+const NAV_TIMEOUT     = 60000;
 const DETAIL_TIMEOUT  = 20000;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Dashboard helpers ─────────────────────────────────────────────────────────
+
+async function loadDashboard(page) {
+  await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
+  await page.waitForSelector("#dvManagerPending", { timeout: 30000 });
+}
 
 async function fetchPendingConsultants(page) {
   return page.evaluate(async () => {
@@ -38,21 +53,21 @@ async function fetchPendingInterns(page) {
 
 async function approveConsultant(page, consultant) {
   const { PaymentID, EmpName, EmpNo, PaymentMonth, PaymentYear, TotalAmount } = consultant;
-
   console.log(`\n   🖊️  Approving consultant: ${EmpName} (PaymentID ${PaymentID})`);
 
-  await page.goto(
-    `${CONSULTANT_BASE}/Consultant/ConsultantEntry?PaymentID=${PaymentID}`,
-    { waitUntil: "domcontentloaded" }
-  );
+  // Direct goto to ConsultantEntry is blocked — must click link from dashboard.
+  await loadDashboard(page);
+  await page.click(`a[href*="PaymentID=${PaymentID}"]`);
+
+  // #hdnDivID is type=hidden; wait for it to be attached and JS-populated.
   await page.waitForSelector("#hdnDivID", { state: "attached", timeout: DETAIL_TIMEOUT });
   await page.waitForFunction(
     () => (document.querySelector("#hdnDivID")?.value ?? "") !== "",
     { timeout: DETAIL_TIMEOUT }
   );
 
-  const divID = await page.evaluate(() => document.querySelector("#hdnDivID")?.value ?? "");
-  if (!divID) throw new Error(`hdnDivID is empty for PaymentID ${PaymentID}`);
+  const divID = await page.$eval("#hdnDivID", el => el.value);
+  if (!divID) throw new Error(`hdnDivID empty for PaymentID ${PaymentID}`);
 
   const result = await page.evaluate(
     async ({ paymentID, divID }) => {
@@ -66,9 +81,8 @@ async function approveConsultant(page, consultant) {
     { paymentID: PaymentID, divID }
   );
 
-  if (result.status !== 200) {
+  if (result.status !== 200)
     throw new Error(`Approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
-  }
 
   console.log(`   ✅ Approved: ${EmpName}`);
   return { type: "consultant", name: EmpName, empNo: EmpNo, paymentID: PaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
@@ -78,13 +92,12 @@ async function approveConsultant(page, consultant) {
 
 async function approveIntern(page, intern) {
   const { InternPaymentID, EmpName, EmpNo, PaymentMonth, PaymentYear, TotalAmount } = intern;
-
   console.log(`\n   🖊️  Approving intern: ${EmpName} (InternPaymentID ${InternPaymentID})`);
 
-  await page.goto(
-    `${CONSULTANT_BASE}/Consultant/InternPaymentEntry?InternPaymentID=${InternPaymentID}`,
-    { waitUntil: "domcontentloaded" }
-  );
+  // Same as consultant — must click from dashboard, not goto directly.
+  await loadDashboard(page);
+  await page.click(`a[href*="InternPaymentID=${InternPaymentID}"]`);
+
   await page.waitForSelector("#hdnDivID", { state: "attached", timeout: DETAIL_TIMEOUT });
   await page.waitForFunction(
     () => (document.querySelector("#hdnDivID")?.value ?? "") !== "",
@@ -95,8 +108,7 @@ async function approveIntern(page, intern) {
     divID:   document.querySelector("#hdnDivID")?.value ?? "",
     remarks: document.querySelector("#txtRemarks")?.value ?? "",
   }));
-
-  if (!divID) throw new Error(`hdnDivID is empty for InternPaymentID ${InternPaymentID}`);
+  if (!divID) throw new Error(`hdnDivID empty for InternPaymentID ${InternPaymentID}`);
 
   const result = await page.evaluate(
     async ({ internPaymentID, divID, remarks }) => {
@@ -110,9 +122,8 @@ async function approveIntern(page, intern) {
     { internPaymentID: InternPaymentID, divID, remarks }
   );
 
-  if (result.status !== 200) {
+  if (result.status !== 200)
     throw new Error(`Intern approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
-  }
 
   console.log(`   ✅ Approved: ${EmpName}`);
   return { type: "intern", name: EmpName, empNo: EmpNo, paymentID: InternPaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
@@ -130,72 +141,55 @@ async function approveAllConsultants(page) {
   };
 
   if (!USERNAME || !PASSWORD) {
-    console.error("❌ DARWINBOX_USERNAME / DARWINBOX_PASSWORD not set — skipping consultant approvals");
+    console.error("❌ DARWINBOX_USERNAME / DARWINBOX_PASSWORD not set — skipping");
     return result;
   }
 
-  // Create a dedicated browser context that auto-responds to the ADFS HTTP auth
-  // challenge (adfs.arvind.in presents WWW-Authenticate: Negotiate/NTLM).
   const browser = page.context().browser();
-  // No httpCredentials — ADFS auth is handled by filling the HTML form below.
-  // Setting httpCredentials would cause Chromium to send NTLM headers to ALL
-  // sites, which confuses consultantmgmt.onearvind.com (ASP.NET NullRefException).
   const context = await browser.newContext();
   const cPage = await context.newPage();
 
   try {
-    // Step 1: Navigate to onearvind.com — this triggers the ADFS WIA redirect.
-    // httpCredentials in the context auto-responds to the WWW-Authenticate challenge.
-    // After auth, ADFS sets the shared .onearvind.com session cookie.
-    // Step 1: Navigate to onearvind.com — ADFS will redirect to a forms login page.
-    // (GitHub Actions Linux Chromium is not detected as WIA-capable, so ADFS serves
-    //  an HTML form rather than a Kerberos/NTLM challenge.)
+    // ── ADFS login ──
     console.log("   🔐 Navigating to onearvind.com for ADFS login...");
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
     console.log(`   📍 After onearvind.com: ${cPage.url()} | title: ${await cPage.title()}`);
 
-    // Step 2: If we landed on the ADFS Sign In page, fill the form.
     if (cPage.url().includes("adfs.arvind.in")) {
       console.log("   📝 ADFS form detected — filling credentials...");
       await cPage.waitForSelector("#userNameInput", { timeout: 10000 });
       await cPage.fill("#userNameInput", USERNAME);
       await cPage.fill("#passwordInput", PASSWORD);
       await cPage.click("#submitButton");
-      // Wait for redirect back to onearvind.com
       await cPage.waitForURL("**/onearvind.com/**", { timeout: 30000 });
       console.log(`   ✅ ADFS auth complete — now at: ${cPage.url()}`);
     }
 
-    // Step 3: Navigate to the consultantmgmt ROOT first (mirrors clicking the link
-    // from onearvind.com — the root may initialize ASP.NET session state that
-    // /Approver/ManagerDashboard depends on).
+    // ── Navigate to consultantmgmt (via root, then dashboard) ──
     console.log("   🔐 Navigating to consultantmgmt root...");
-    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: 60000 });
-    console.log(`   📍 After root nav: ${cPage.url()} | title: ${await cPage.title()}`);
+    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
+    console.log(`   📍 Root nav: ${cPage.url()} | title: ${await cPage.title()}`);
 
-    // Step 4: Navigate to the dashboard.
-    console.log("   🔐 Navigating to consultant dashboard...");
-    await cPage.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: 60000 });
-    console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
-    // Debug: log first 500 chars of page HTML if selector not found
-    try {
-      await cPage.waitForSelector("#dvManagerPending", { timeout: 30000 });
-    } catch (e) {
-      const html = await cPage.content();
-      console.log(`   🔍 Page HTML (first 800 chars):\n${html.slice(0, 800)}`);
-      throw e;
-    }
+    // ── Fetch pending lists from dashboard ──
+    await loadDashboard(cPage);
     console.log("   ✅ Consultant dashboard loaded");
 
-    // ── Consultants ──
     let pendingConsultants = [];
+    let pendingInterns = [];
     try {
       pendingConsultants = await fetchPendingConsultants(cPage);
       console.log(`\n📌 Pending consultants: ${pendingConsultants.length}`);
     } catch (err) {
       console.error(`❌ Failed to fetch pending consultants: ${err.message}`);
     }
+    try {
+      pendingInterns = await fetchPendingInterns(cPage);
+      console.log(`📌 Pending interns: ${pendingInterns.length}`);
+    } catch (err) {
+      console.error(`❌ Failed to fetch pending interns: ${err.message}`);
+    }
 
+    // ── Approve consultants ──
     for (const consultant of pendingConsultants) {
       try {
         const record = await approveConsultant(cPage, consultant);
@@ -207,19 +201,7 @@ async function approveAllConsultants(page) {
       }
     }
 
-    // Reload dashboard for interns
-    await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
-    await cPage.waitForSelector("#dvManagerPending", { timeout: 45000 });
-
-    // ── Interns ──
-    let pendingInterns = [];
-    try {
-      pendingInterns = await fetchPendingInterns(cPage);
-      console.log(`\n📌 Pending interns: ${pendingInterns.length}`);
-    } catch (err) {
-      console.error(`❌ Failed to fetch pending interns: ${err.message}`);
-    }
-
+    // ── Approve interns ──
     for (const intern of pendingInterns) {
       try {
         const record = await approveIntern(cPage, intern);
@@ -232,7 +214,7 @@ async function approveAllConsultants(page) {
     }
 
   } catch (err) {
-    console.error(`❌ Could not load consultant dashboard: ${err.message}`);
+    console.error(`❌ Could not complete consultant approvals: ${err.message}`);
   } finally {
     await context.close();
   }
