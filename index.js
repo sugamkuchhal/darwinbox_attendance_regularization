@@ -16,8 +16,8 @@ async function run() {
   try {
     await login(page);
     const summary = await regularizeAttendance(page);
-    await approveAllLeaveRequests(page);
-    await sendRegularizationEmail(summary);
+    const taskApprovals = await approveAllLeaveRequests(page);
+    await sendRegularizationEmail(summary, taskApprovals);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
     await page.screenshot({ path: "error_screenshot.png", fullPage: true }).catch(() => {});

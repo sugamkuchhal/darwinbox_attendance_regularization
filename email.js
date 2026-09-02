@@ -19,7 +19,7 @@ function buildSubject(pendingCount) {
   return `${prefix} Darwinbox regularization summary (${date})`;
 }
 
-async function sendRegularizationEmail(summary) {
+async function sendRegularizationEmail(summary, taskApprovals = null) {
   const recipient = getRecipient();
   if (!recipient) {
     console.log("⚠️ Email skipped: no valid recipient in DARWINBOX_USERNAME/REPORT_EMAIL_TO");
@@ -50,6 +50,18 @@ async function sendRegularizationEmail(summary) {
   });
 
   const subject = buildSubject(pendingCount);
+  const leaveLines = taskApprovals?.leave
+    ? taskApprovals.leave.approved === 0
+      ? ["- none"]
+      : taskApprovals.leave.records.map((r) => `- ${r}`)
+    : ["- not run"];
+
+  const tcLines = taskApprovals?.timeCorrection
+    ? taskApprovals.timeCorrection.approved === 0
+      ? ["- none"]
+      : taskApprovals.timeCorrection.records.map((r) => `- ${r}`)
+    : ["- not run"];
+
   const text = [
     `Hello,`,
     ``,
@@ -60,6 +72,12 @@ async function sendRegularizationEmail(summary) {
     ``,
     `Pending (${pendingCount}):`,
     pendingDates.length ? pendingDates.map((d) => `- ${d}`).join("\n") : "- none",
+    ``,
+    `Leave requests approved (${taskApprovals?.leave?.approved ?? 0}):`,
+    leaveLines.join("\n"),
+    ``,
+    `Time corrections approved (${taskApprovals?.timeCorrection?.approved ?? 0}):`,
+    tcLines.join("\n"),
     ``,
     `Regards,`,
     `Darwinbox Automation`

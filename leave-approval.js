@@ -24,6 +24,22 @@ async function countButtons(page, selector) {
   return page.evaluate((sel) => document.querySelectorAll(sel).length, selector);
 }
 
+// Extract employee name and request type from the first row containing an approve button.
+async function extractFirstRowInfo(page, approveSelector) {
+  return page.evaluate((sel) => {
+    const btn = document.querySelector(sel);
+    if (!btn) return null;
+    const row = btn.closest("tr");
+    if (!row) return null;
+    const cells = [...row.querySelectorAll("td")].map((td) => {
+      const clone = td.cloneNode(true);
+      clone.querySelectorAll("DBX-DS-BUTTON, button, a").forEach((el) => el.remove());
+      return clone.textContent.trim().replace(/\s+/g, " ");
+    }).filter((t) => t.length > 0);
+    return cells;
+  }, approveSelector);
+}
+
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 
 // Click a named tab. The clickable element is div.tab-container inside each
@@ -99,13 +115,15 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
   }
 
   console.log(`📋 ${initialCount} pending ${label}`);
-  const results = { approved: 0, failed: 0 };
+  const results = { approved: 0, failed: 0, records: [] };
 
   while (true) {
     const countBefore = await countButtons(page, approveSelector);
     if (countBefore === 0) break;
 
-    console.log(`\n   🖊️  Approving (${countBefore} remaining)...`);
+    const rowInfo = await extractFirstRowInfo(page, approveSelector);
+    const rowLabel = rowInfo ? rowInfo.slice(0, 2).join(" | ") : "unknown";
+    console.log(`\n   🖊️  Approving: ${rowLabel} (${countBefore} remaining)...`);
 
     try {
       const btn = page.locator(approveSelector).first();
@@ -127,6 +145,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
     if (!tableFound) {
       console.log(`   ✅ Approved (Task Box exited — all ${label} processed)`);
       results.approved++;
+      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
       break;
     }
 
@@ -134,6 +153,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
     if (!onTabAfter) {
       console.log(`   ✅ Approved (${tabName} tab removed — 0 remaining)`);
       results.approved++;
+      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
       break;
     }
 
@@ -142,6 +162,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
       const delta = countBefore - countAfter;
       console.log(`   ✅ Approved (${delta} removed, ${countAfter} remaining)`);
       results.approved += delta;
+      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
     } else {
       console.warn(`   ⚠️ Count unchanged after approval — stopping`);
       await takeStepScreenshot(page, `${label.replace(/ /g,"_")}_unchanged.png`, "count unchanged", { log: true });
@@ -170,13 +191,11 @@ async function approveAllLeaveRequests(page) {
     label: "time corrections",
   });
 
-  const total = {
-    approved: leaveResult.approved + tcResult.approved,
-    failed: leaveResult.failed + tcResult.failed,
-  };
-
   console.log(`\n✅ Task approvals done. Leave: ${leaveResult.approved} approved. Time Correction: ${tcResult.approved} approved.`);
-  return total;
+  return {
+    leave: leaveResult,
+    timeCorrection: tcResult,
+  };
 }
 
 module.exports = { approveAllLeaveRequests };
