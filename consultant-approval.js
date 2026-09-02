@@ -1,15 +1,7 @@
 // Approves all pending Consultant and Intern payments on consultantmgmt.onearvind.com.
 //
-// Auth flow (empirically verified):
-//   1. Navigate to onearvind.com → ADFS redirects to forms login (/adfs/ls/)
-//   2. Fill #userNameInput / #passwordInput / #submitButton
-//   3. ADFS sets shared .onearvind.com cookie
-//   4. Navigate to consultantmgmt root → redirects to Manager Dashboard
-//
-// Detail page access:
-//   Direct goto("/Consultant/ConsultantEntry?PaymentID=X") → /Home/UnAuthorized
-//   Click link from dashboard → page loads correctly (server checks referrer/session)
-//   So each approval: reload dashboard → click employee link → read hdnDivID → POST
+// Auth flow: onearvind.com → ADFS forms login → consultantmgmt root → dashboard
+// Detail pages must be reached by clicking from dashboard (direct goto → /Home/UnAuthorized)
 
 const { USERNAME, PASSWORD } = require("./config");
 
@@ -17,8 +9,6 @@ const CONSULTANT_BASE = "https://consultantmgmt.onearvind.com";
 const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
 const NAV_TIMEOUT     = 60000;
 const DETAIL_TIMEOUT  = 20000;
-
-// ─── Dashboard helpers ─────────────────────────────────────────────────────────
 
 async function loadDashboard(page) {
   await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
@@ -49,17 +39,13 @@ async function fetchPendingInterns(page) {
   });
 }
 
-// ─── Consultant approval ───────────────────────────────────────────────────────
-
 async function approveConsultant(page, consultant) {
   const { PaymentID, EmpName, EmpNo, PaymentMonth, PaymentYear, TotalAmount } = consultant;
-  console.log(`\n   🖊️  Approving consultant: ${EmpName} (PaymentID ${PaymentID})`);
+  console.log(`   🖊️  ${EmpName} (PaymentID ${PaymentID})`);
 
-  // Direct goto to ConsultantEntry is blocked — must click link from dashboard.
   await loadDashboard(page);
   await page.click(`a[href*="PaymentID=${PaymentID}"]`);
 
-  // #hdnDivID is type=hidden; wait for it to be attached and JS-populated.
   await page.waitForSelector("#hdnDivID", { state: "attached", timeout: DETAIL_TIMEOUT });
   await page.waitForFunction(
     () => (document.querySelector("#hdnDivID")?.value ?? "") !== "",
@@ -84,17 +70,14 @@ async function approveConsultant(page, consultant) {
   if (result.status !== 200)
     throw new Error(`Approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
 
-  console.log(`   ✅ Approved: ${EmpName}`);
+  console.log(`   ✅ ${EmpName}`);
   return { type: "consultant", name: EmpName, empNo: EmpNo, paymentID: PaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
 }
 
-// ─── Intern approval ───────────────────────────────────────────────────────────
-
 async function approveIntern(page, intern) {
   const { InternPaymentID, EmpName, EmpNo, PaymentMonth, PaymentYear, TotalAmount } = intern;
-  console.log(`\n   🖊️  Approving intern: ${EmpName} (InternPaymentID ${InternPaymentID})`);
+  console.log(`   🖊️  ${EmpName} (InternPaymentID ${InternPaymentID})`);
 
-  // Same as consultant — must click from dashboard, not goto directly.
   await loadDashboard(page);
   await page.click(`a[href*="InternPaymentID=${InternPaymentID}"]`);
 
@@ -125,16 +108,11 @@ async function approveIntern(page, intern) {
   if (result.status !== 200)
     throw new Error(`Intern approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
 
-  console.log(`   ✅ Approved: ${EmpName}`);
+  console.log(`   ✅ ${EmpName}`);
   return { type: "intern", name: EmpName, empNo: EmpNo, paymentID: InternPaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
 }
 
-// ─── Main entry point ──────────────────────────────────────────────────────────
-
 async function approveAllConsultants(page) {
-  console.log("\n📋 Consultant & Intern Approvals");
-  console.log("─".repeat(40));
-
   const result = {
     consultants: { approved: 0, failed: 0, records: [] },
     interns:     { approved: 0, failed: 0, records: [] },
@@ -150,77 +128,67 @@ async function approveAllConsultants(page) {
   const cPage = await context.newPage();
 
   try {
-    // ── ADFS login ──
-    console.log("   🔐 Navigating to onearvind.com for ADFS login...");
+    console.log("   🔐 Logging in via ADFS...");
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
-    console.log(`   📍 After onearvind.com: ${cPage.url()} | title: ${await cPage.title()}`);
 
     if (cPage.url().includes("adfs.arvind.in")) {
-      console.log("   📝 ADFS form detected — filling credentials...");
       await cPage.waitForSelector("#userNameInput", { timeout: 10000 });
       await cPage.fill("#userNameInput", USERNAME);
       await cPage.fill("#passwordInput", PASSWORD);
       await cPage.click("#submitButton");
       await cPage.waitForURL("**/onearvind.com/**", { timeout: 30000 });
-      console.log(`   ✅ ADFS auth complete — now at: ${cPage.url()}`);
     }
 
-    // ── Navigate to consultantmgmt (via root, then dashboard) ──
-    console.log("   🔐 Navigating to consultantmgmt root...");
     await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
-    console.log(`   📍 Root nav: ${cPage.url()} | title: ${await cPage.title()}`);
-
-    // ── Fetch pending lists from dashboard ──
     await loadDashboard(cPage);
-    console.log("   ✅ Consultant dashboard loaded");
 
     let pendingConsultants = [];
     let pendingInterns = [];
+
     try {
       pendingConsultants = await fetchPendingConsultants(cPage);
-      console.log(`\n📌 Pending consultants: ${pendingConsultants.length}`);
+      console.log(`   📌 Pending consultants: ${pendingConsultants.length}`);
     } catch (err) {
-      console.error(`❌ Failed to fetch pending consultants: ${err.message}`);
-    }
-    try {
-      pendingInterns = await fetchPendingInterns(cPage);
-      console.log(`📌 Pending interns: ${pendingInterns.length}`);
-    } catch (err) {
-      console.error(`❌ Failed to fetch pending interns: ${err.message}`);
+      console.error(`   ❌ Failed to fetch pending consultants: ${err.message}`);
     }
 
-    // ── Approve consultants ──
+    try {
+      pendingInterns = await fetchPendingInterns(cPage);
+      console.log(`   📌 Pending interns: ${pendingInterns.length}`);
+    } catch (err) {
+      console.error(`   ❌ Failed to fetch pending interns: ${err.message}`);
+    }
+
     for (const consultant of pendingConsultants) {
       try {
         const record = await approveConsultant(cPage, consultant);
         result.consultants.approved++;
         result.consultants.records.push(record);
       } catch (err) {
-        console.error(`   ❌ Failed to approve ${consultant.EmpName}: ${err.message}`);
+        console.error(`   ❌ ${consultant.EmpName}: ${err.message}`);
         result.consultants.failed++;
       }
     }
 
-    // ── Approve interns ──
     for (const intern of pendingInterns) {
       try {
         const record = await approveIntern(cPage, intern);
         result.interns.approved++;
         result.interns.records.push(record);
       } catch (err) {
-        console.error(`   ❌ Failed to approve ${intern.EmpName}: ${err.message}`);
+        console.error(`   ❌ ${intern.EmpName}: ${err.message}`);
         result.interns.failed++;
       }
     }
 
   } catch (err) {
-    console.error(`❌ Could not complete consultant approvals: ${err.message}`);
+    console.error(`   ❌ Could not complete approvals: ${err.message}`);
   } finally {
     await context.close();
   }
 
-  console.log(`\n✅ Consultant approvals done — ${result.consultants.approved} approved, ${result.consultants.failed} failed`);
-  console.log(`✅ Intern approvals done — ${result.interns.approved} approved, ${result.interns.failed} failed`);
+  console.log(`   ✅ Consultants: ${result.consultants.approved} approved, ${result.consultants.failed} failed`);
+  console.log(`   ✅ Interns: ${result.interns.approved} approved, ${result.interns.failed} failed`);
 
   return result;
 }

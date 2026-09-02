@@ -14,9 +14,9 @@ function getRecipient() {
 }
 
 function buildSubject(pendingCount) {
-  const prefix = pendingCount === 0 ? "[ALL GOOD]" : "[PENDING]";
-  const date = new Date().toISOString().slice(0, 10);
-  return `${prefix} Darwinbox regularization summary (${date})`;
+  const prefix = pendingCount === 0 ? "[ALL GOOD]" : `[${pendingCount} PENDING]`;
+  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  return `${prefix} Darwinbox · ${date}`;
 }
 
 function monthName(m) {
@@ -25,6 +25,10 @@ function monthName(m) {
 
 function fmtAmount(n) {
   return "₹" + Number(n).toLocaleString("en-IN");
+}
+
+function line(char = "═", len = 40) {
+  return char.repeat(len);
 }
 
 async function sendRegularizationEmail(summary, taskApprovals = null, consultantApprovals = null) {
@@ -50,65 +54,75 @@ async function sendRegularizationEmail(summary, taskApprovals = null, consultant
   const regularizedDates = summary.succeeded || [];
   const pendingCount = pendingDates.length;
 
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
-  });
-
+  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   const subject = buildSubject(pendingCount);
 
-  const leaveLines = taskApprovals?.leave
-    ? taskApprovals.leave.approved === 0
-      ? ["- none"]
-      : taskApprovals.leave.records.map((r) => `- ${r}`)
-    : ["- not run"];
+  // ── Attendance ──
+  const attendanceBlock = [
+    `ATTENDANCE`,
+    `  Regularized : ${regularizedDates.length} dates`,
+    `  Pending     : ${pendingCount} dates` + (pendingDates.length ? ` (${pendingDates.join(", ")})` : ""),
+  ].join("\n");
 
-  const tcLines = taskApprovals?.timeCorrection
-    ? taskApprovals.timeCorrection.approved === 0
-      ? ["- none"]
-      : taskApprovals.timeCorrection.records.map((r) => `- ${r}`)
-    : ["- not run"];
+  // ── Leave ──
+  const leaveApproved = taskApprovals?.leave?.approved ?? null;
+  const leaveRecords = taskApprovals?.leave?.records ?? [];
+  const leaveBlock = [
+    `LEAVE APPROVALS`,
+    `  Approved : ${leaveApproved ?? "not run"}`,
+    ...(leaveRecords.length ? leaveRecords.map((r) => `  - ${r}`) : ["  - none"]),
+  ].join("\n");
 
-  const consultantLines = consultantApprovals?.consultants?.approved > 0
-    ? consultantApprovals.consultants.records.map(
-        (r) => `- ${r.name} (Emp ${r.empNo}) | Payment ID ${r.paymentID} | ${monthName(r.month)} ${r.year} | Net ${fmtAmount(r.netAmount)}`
-      )
-    : ["- none"];
+  // ── Time Correction ──
+  const tcApproved = taskApprovals?.timeCorrection?.approved ?? null;
+  const tcRecords = taskApprovals?.timeCorrection?.records ?? [];
+  const tcBlock = [
+    `TIME CORRECTIONS`,
+    `  Approved : ${tcApproved ?? "not run"}`,
+    ...(tcRecords.length ? tcRecords.map((r) => `  - ${r}`) : ["  - none"]),
+  ].join("\n");
 
-  const internLines = consultantApprovals?.interns?.approved > 0
-    ? consultantApprovals.interns.records.map(
-        (r) => `- ${r.name} (Emp ${r.empNo}) | Payment ID ${r.paymentID} | ${monthName(r.month)} ${r.year} | Net ${fmtAmount(r.netAmount)}`
-      )
-    : ["- none"];
+  // ── Consultants ──
+  const cApproved = consultantApprovals?.consultants?.approved ?? null;
+  const cRecords = consultantApprovals?.consultants?.records ?? [];
+  const consultantBlock = [
+    `CONSULTANT PAYMENTS`,
+    `  Approved : ${cApproved ?? "not run"}`,
+    ...(cRecords.length
+      ? cRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
+      : ["  - none"]),
+  ].join("\n");
+
+  // ── Interns ──
+  const iApproved = consultantApprovals?.interns?.approved ?? null;
+  const iRecords = consultantApprovals?.interns?.records ?? [];
+  const internBlock = [
+    `INTERN PAYMENTS`,
+    `  Approved : ${iApproved ?? "not run"}`,
+    ...(iRecords.length
+      ? iRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
+      : ["  - none"]),
+  ].join("\n");
 
   const text = [
-    `Hello,`,
+    `DARWINBOX AUTOMATION · ${date}`,
+    line(),
     ``,
-    `Attendance regularization run is complete.`,
+    attendanceBlock,
     ``,
-    `Regularized (${regularizedDates.length}):`,
-    regularizedDates.length ? regularizedDates.map((d) => `- ${d}`).join("\n") : "- none",
+    leaveBlock,
     ``,
-    `Pending (${pendingCount}):`,
-    pendingDates.length ? pendingDates.map((d) => `- ${d}`).join("\n") : "- none",
+    tcBlock,
     ``,
-    `Leave requests approved (${taskApprovals?.leave?.approved ?? 0}):`,
-    leaveLines.join("\n"),
+    consultantBlock,
     ``,
-    `Time corrections approved (${taskApprovals?.timeCorrection?.approved ?? 0}):`,
-    tcLines.join("\n"),
+    internBlock,
     ``,
-    `Consultant payments approved (${consultantApprovals?.consultants?.approved ?? "not run"}):`,
-    consultantLines.join("\n"),
-    ``,
-    `Intern payments approved (${consultantApprovals?.interns?.approved ?? "not run"}):`,
-    internLines.join("\n"),
-    ``,
-    `Regards,`,
-    `Darwinbox Automation`
+    line(),
+    `Darwinbox Automation`,
   ].join("\n");
+
+  const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
 
   try {
     await transporter.sendMail({ from, to: recipient, subject, text });

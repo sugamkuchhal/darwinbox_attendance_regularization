@@ -6,6 +6,12 @@ const { approveAllLeaveRequests } = require("./leave-approval");
 const { approveAllConsultants } = require("./consultant-approval");
 const { sendRegularizationEmail } = require("./email");
 
+function step(n, total, label) {
+  console.log(`\n${"═".repeat(40)}`);
+  console.log(`STEP ${n}/${total} · ${label}`);
+  console.log(`${"═".repeat(40)}`);
+}
+
 async function run() {
   if (!DARWINBOX_URL || !USERNAME || !PASSWORD || !EMPLOYEE_ID) {
     console.error("❌ Missing required env vars: DARWINBOX_URL, DARWINBOX_USERNAME, DARWINBOX_PASSWORD, DARWINBOX_EMPLOYEE_ID");
@@ -15,10 +21,19 @@ async function run() {
   const { browser, page } = await launchBrowser();
 
   try {
+    step(1, 5, "Login");
     await login(page);
+
+    step(2, 5, "Attendance Regularization");
     const summary = await regularizeAttendance(page);
+
+    step(3, 5, "Leave & Time Correction Approvals");
     const taskApprovals = await approveAllLeaveRequests(page);
+
+    step(4, 5, "Consultant & Intern Approvals");
     const consultantApprovals = await approveAllConsultants(page);
+
+    step(5, 5, "Summary Email");
     await sendRegularizationEmail(summary, taskApprovals, consultantApprovals);
   } catch (err) {
     console.error("❌ Fatal error:", err.message);
