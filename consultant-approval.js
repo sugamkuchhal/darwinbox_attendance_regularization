@@ -1,45 +1,14 @@
 // Approves all pending Consultant and Intern payments on consultantmgmt.onearvind.com.
-// Uses the same MS SSO session already established by login() — no separate login needed.
+// Auth: creates a separate browser context that handles the ADFS HTTP auth challenge
+// using Arvind AD credentials (ARVIND_USER / ARVIND_PASS env vars).
+
+const { ARVIND_USER, ARVIND_PASS } = require("./config");
 
 const CONSULTANT_BASE = "https://consultantmgmt.onearvind.com";
-const DASHBOARD_URL = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
-const DASHBOARD_LOAD_TIMEOUT_MS = 20000;
-const DETAIL_LOAD_TIMEOUT_MS = 15000;
+const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
+const DETAIL_TIMEOUT  = 20000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-async function ensureDashboard(page) {
-  await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
-
-  // ADFS SSO for a new SP redirects through a form-POST chain.
-  // Poll until we land on the dashboard, handling any "Stay signed in?" prompt.
-  const deadline = Date.now() + 60000; // 60s total budget
-
-  while (Date.now() < deadline) {
-    // Already on dashboard?
-    const onDashboard = await page.$("#dvManagerPending").catch(() => null);
-    if (onDashboard) break;
-
-    // "Stay signed in?" — same prompt as Darwinbox login flow
-    const stayBtn = await page
-      .$('input[value="Yes"], button:has-text("Yes")')
-      .catch(() => null);
-    if (stayBtn) {
-      console.log("   🔐 ADFS 'Stay signed in?' — clicking Yes");
-      await stayBtn.click().catch(() => {});
-      await page
-        .waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
-        .catch(() => {});
-      continue;
-    }
-
-    await page.waitForTimeout(1000);
-  }
-
-  // Final authoritative check with a short timeout
-  await page.waitForSelector("#dvManagerPending", { timeout: 10000 });
-  console.log("   ✅ Consultant dashboard loaded");
-}
 
 async function fetchPendingConsultants(page) {
   return page.evaluate(async () => {
@@ -48,7 +17,8 @@ async function fetchPendingConsultants(page) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "draw=1&start=0&length=1000",
     });
-    return resp.json();
+    const data = await resp.json();
+    return data.data ?? data;
   });
 }
 
@@ -59,7 +29,8 @@ async function fetchPendingInterns(page) {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "draw=1&start=0&length=1000",
     });
-    return resp.json();
+    const data = await resp.json();
+    return data.data ?? data;
   });
 }
 
@@ -70,32 +41,21 @@ async function approveConsultant(page, consultant) {
 
   console.log(`\n   🖊️  Approving consultant: ${EmpName} (PaymentID ${PaymentID})`);
 
-  // Navigate to detail page — DivisionID lives there as a hidden input.
   await page.goto(
     `${CONSULTANT_BASE}/Consultant/ConsultantEntry?PaymentID=${PaymentID}`,
     { waitUntil: "domcontentloaded" }
   );
-  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_LOAD_TIMEOUT_MS });
+  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_TIMEOUT });
 
-  const divID = await page.evaluate(
-    () => document.querySelector("#hdnDivID")?.value ?? ""
-  );
-
-  if (!divID) {
-    throw new Error(`hdnDivID is empty for PaymentID ${PaymentID}`);
-  }
+  const divID = await page.evaluate(() => document.querySelector("#hdnDivID")?.value ?? "");
+  if (!divID) throw new Error(`hdnDivID is empty for PaymentID ${PaymentID}`);
 
   const result = await page.evaluate(
     async ({ paymentID, divID }) => {
       const resp = await fetch("/Consultant/ApproveRejectRequest/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          PaymentID: String(paymentID),
-          StatusID: 2,
-          ConsultantDivisionID: divID,
-          Remarks: "",
-        }),
+        body: JSON.stringify({ PaymentID: String(paymentID), StatusID: 2, ConsultantDivisionID: divID, Remarks: "" }),
       });
       return { status: resp.status, body: await resp.text() };
     },
@@ -103,21 +63,11 @@ async function approveConsultant(page, consultant) {
   );
 
   if (result.status !== 200) {
-    throw new Error(
-      `Approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`
-    );
+    throw new Error(`Approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
   }
 
   console.log(`   ✅ Approved: ${EmpName}`);
-  return {
-    type: "consultant",
-    name: EmpName,
-    empNo: EmpNo,
-    paymentID: PaymentID,
-    month: PaymentMonth,
-    year: PaymentYear,
-    netAmount: TotalAmount,
-  };
+  return { type: "consultant", name: EmpName, empNo: EmpNo, paymentID: PaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
 }
 
 // ─── Intern approval ───────────────────────────────────────────────────────────
@@ -131,29 +81,21 @@ async function approveIntern(page, intern) {
     `${CONSULTANT_BASE}/Consultant/InternPaymentEntry?InternPaymentID=${InternPaymentID}`,
     { waitUntil: "domcontentloaded" }
   );
-  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_LOAD_TIMEOUT_MS });
+  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_TIMEOUT });
 
-  // Read both DivisionID and the pre-populated Remarks from the form.
   const { divID, remarks } = await page.evaluate(() => ({
-    divID: document.querySelector("#hdnDivID")?.value ?? "",
+    divID:   document.querySelector("#hdnDivID")?.value ?? "",
     remarks: document.querySelector("#txtRemarks")?.value ?? "",
   }));
 
-  if (!divID) {
-    throw new Error(`hdnDivID is empty for InternPaymentID ${InternPaymentID}`);
-  }
+  if (!divID) throw new Error(`hdnDivID is empty for InternPaymentID ${InternPaymentID}`);
 
   const result = await page.evaluate(
     async ({ internPaymentID, divID, remarks }) => {
       const resp = await fetch("/Consultant/ApproveRejectRequestIntern/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          InternPaymentID: String(internPaymentID),
-          StatusID: 2,
-          ConsultantDivisionID: divID,
-          Remarks: remarks,
-        }),
+        body: JSON.stringify({ InternPaymentID: String(internPaymentID), StatusID: 2, ConsultantDivisionID: divID, Remarks: remarks }),
       });
       return { status: resp.status, body: await resp.text() };
     },
@@ -161,21 +103,11 @@ async function approveIntern(page, intern) {
   );
 
   if (result.status !== 200) {
-    throw new Error(
-      `Intern approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`
-    );
+    throw new Error(`Intern approval POST failed — HTTP ${result.status}: ${result.body.slice(0, 200)}`);
   }
 
   console.log(`   ✅ Approved: ${EmpName}`);
-  return {
-    type: "intern",
-    name: EmpName,
-    empNo: EmpNo,
-    paymentID: InternPaymentID,
-    month: PaymentMonth,
-    year: PaymentYear,
-    netAmount: TotalAmount,
-  };
+  return { type: "intern", name: EmpName, empNo: EmpNo, paymentID: InternPaymentID, month: PaymentMonth, year: PaymentYear, netAmount: TotalAmount };
 }
 
 // ─── Main entry point ──────────────────────────────────────────────────────────
@@ -186,71 +118,83 @@ async function approveAllConsultants(page) {
 
   const result = {
     consultants: { approved: 0, failed: 0, records: [] },
-    interns: { approved: 0, failed: 0, records: [] },
+    interns:     { approved: 0, failed: 0, records: [] },
   };
 
+  if (!ARVIND_USER || !ARVIND_PASS) {
+    console.error("❌ ARVIND_USER / ARVIND_PASS not set — skipping consultant approvals");
+    return result;
+  }
+
+  // Create a dedicated browser context that auto-responds to the ADFS HTTP auth
+  // challenge (adfs.arvind.in presents WWW-Authenticate: Negotiate/NTLM).
+  const browser = page.context().browser();
+  const context = await browser.newContext({
+    httpCredentials: { username: ARVIND_USER, password: ARVIND_PASS },
+  });
+  const cPage = await context.newPage();
+
   try {
-    await ensureDashboard(page);
+    console.log("   🔐 Navigating to consultant dashboard (ADFS auth)...");
+    await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
+
+    // The ADFS WIA challenge is handled automatically by httpCredentials.
+    // Wait for the dashboard indicator.
+    await cPage.waitForSelector("#dvManagerPending", { timeout: 45000 });
+    console.log("   ✅ Consultant dashboard loaded");
+
+    // ── Consultants ──
+    let pendingConsultants = [];
+    try {
+      pendingConsultants = await fetchPendingConsultants(cPage);
+      console.log(`\n📌 Pending consultants: ${pendingConsultants.length}`);
+    } catch (err) {
+      console.error(`❌ Failed to fetch pending consultants: ${err.message}`);
+    }
+
+    for (const consultant of pendingConsultants) {
+      try {
+        const record = await approveConsultant(cPage, consultant);
+        result.consultants.approved++;
+        result.consultants.records.push(record);
+      } catch (err) {
+        console.error(`   ❌ Failed to approve ${consultant.EmpName}: ${err.message}`);
+        result.consultants.failed++;
+      }
+    }
+
+    // Reload dashboard for interns
+    await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
+    await cPage.waitForSelector("#dvManagerPending", { timeout: 45000 });
+
+    // ── Interns ──
+    let pendingInterns = [];
+    try {
+      pendingInterns = await fetchPendingInterns(cPage);
+      console.log(`\n📌 Pending interns: ${pendingInterns.length}`);
+    } catch (err) {
+      console.error(`❌ Failed to fetch pending interns: ${err.message}`);
+    }
+
+    for (const intern of pendingInterns) {
+      try {
+        const record = await approveIntern(cPage, intern);
+        result.interns.approved++;
+        result.interns.records.push(record);
+      } catch (err) {
+        console.error(`   ❌ Failed to approve ${intern.EmpName}: ${err.message}`);
+        result.interns.failed++;
+      }
+    }
+
   } catch (err) {
     console.error(`❌ Could not load consultant dashboard: ${err.message}`);
-    return result;
+  } finally {
+    await context.close();
   }
 
-  // ── Consultants ──
-  let pendingConsultants = [];
-  try {
-    pendingConsultants = await fetchPendingConsultants(page);
-    console.log(`\n📌 Pending consultants: ${pendingConsultants.length}`);
-  } catch (err) {
-    console.error(`❌ Failed to fetch pending consultants: ${err.message}`);
-  }
-
-  for (const consultant of pendingConsultants) {
-    try {
-      const record = await approveConsultant(page, consultant);
-      result.consultants.approved++;
-      result.consultants.records.push(record);
-    } catch (err) {
-      console.error(`   ❌ Failed to approve ${consultant.EmpName}: ${err.message}`);
-      result.consultants.failed++;
-    }
-  }
-
-  // Navigate back to dashboard before fetching interns
-  // (detail page navigation leaves us off the consultant domain context)
-  try {
-    await ensureDashboard(page);
-  } catch (err) {
-    console.error(`❌ Could not reload dashboard for interns: ${err.message}`);
-    return result;
-  }
-
-  // ── Interns ──
-  let pendingInterns = [];
-  try {
-    pendingInterns = await fetchPendingInterns(page);
-    console.log(`\n📌 Pending interns: ${pendingInterns.length}`);
-  } catch (err) {
-    console.error(`❌ Failed to fetch pending interns: ${err.message}`);
-  }
-
-  for (const intern of pendingInterns) {
-    try {
-      const record = await approveIntern(page, intern);
-      result.interns.approved++;
-      result.interns.records.push(record);
-    } catch (err) {
-      console.error(`   ❌ Failed to approve ${intern.EmpName}: ${err.message}`);
-      result.interns.failed++;
-    }
-  }
-
-  console.log(
-    `\n✅ Consultant approvals done — ${result.consultants.approved} approved, ${result.consultants.failed} failed`
-  );
-  console.log(
-    `✅ Intern approvals done — ${result.interns.approved} approved, ${result.interns.failed} failed`
-  );
+  console.log(`\n✅ Consultant approvals done — ${result.consultants.approved} approved, ${result.consultants.failed} failed`);
+  console.log(`✅ Intern approvals done — ${result.interns.approved} approved, ${result.interns.failed} failed`);
 
   return result;
 }

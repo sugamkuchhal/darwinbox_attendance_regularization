@@ -7,6 +7,11 @@ const GITHUB_REPO   = process.env.GITHUB_REPOSITORY;
 const EMPLOYEE_ID   = process.env.DARWINBOX_EMPLOYEE_ID;
 const DARWINBOX_TOTP_SECRET = process.env.DARWINBOX_TOTP_SECRET;
 
+// ─── ARVIND INTRANET CREDENTIALS (for consultantmgmt.onearvind.com) ──────────
+// These are your Arvind AD credentials (the ones used on adfs.arvind.in).
+const ARVIND_USER = process.env.ARVIND_USER;   // e.g. sugam.kuchhal@arvind.in
+const ARVIND_PASS = process.env.ARVIND_PASS;
+
 // ─── MFA CONFIG ───────────────────────────────────────────────────────────────
 const WAIT_MINUTES = 2; // minutes to wait per MFA method before falling back
 
@@ -33,6 +38,8 @@ module.exports = {
   GITHUB_REPO,
   EMPLOYEE_ID,
   DARWINBOX_TOTP_SECRET,
+  ARVIND_USER,
+  ARVIND_PASS,
   WAIT_MINUTES,
   MFA_METHOD_ORDER,
   TIMEOUT_MS,
