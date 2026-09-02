@@ -159,9 +159,9 @@ async function approveAllConsultants(page) {
 
     // Step 3: Navigate to the dashboard — .onearvind.com cookie is now set.
     console.log("   🔐 Navigating to consultant dashboard...");
-    await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
+    await cPage.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: 60000 });
     console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
-    await cPage.waitForSelector("#dvManagerPending", { timeout: 45000 });
+    await cPage.waitForSelector("#dvManagerPending", { timeout: 30000 });
     console.log("   ✅ Consultant dashboard loaded");
 
     // ── Consultants ──
