@@ -161,7 +161,14 @@ async function approveAllConsultants(page) {
     console.log("   🔐 Navigating to consultant dashboard...");
     await cPage.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: 60000 });
     console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
-    await cPage.waitForSelector("#dvManagerPending", { timeout: 30000 });
+    // Debug: log first 500 chars of page HTML if selector not found
+    try {
+      await cPage.waitForSelector("#dvManagerPending", { timeout: 30000 });
+    } catch (e) {
+      const html = await cPage.content();
+      console.log(`   🔍 Page HTML (first 800 chars):\n${html.slice(0, 800)}`);
+      throw e;
+    }
     console.log("   ✅ Consultant dashboard loaded");
 
     // ── Consultants ──
