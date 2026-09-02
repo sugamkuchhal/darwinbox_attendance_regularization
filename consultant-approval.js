@@ -140,10 +140,12 @@ async function approveAllConsultants(page) {
     // After auth, ADFS sets the shared .onearvind.com session cookie.
     console.log("   🔐 Authenticating via onearvind.com (ADFS)...");
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
+    console.log(`   📍 After onearvind.com: ${cPage.url()} | title: ${await cPage.title()}`);
 
     // Step 2: Now that the .onearvind.com cookie is set, navigate to the dashboard.
     console.log("   🔐 Navigating to consultant dashboard...");
     await cPage.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded" });
+    console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
     await cPage.waitForSelector("#dvManagerPending", { timeout: 45000 });
     console.log("   ✅ Consultant dashboard loaded");
 
