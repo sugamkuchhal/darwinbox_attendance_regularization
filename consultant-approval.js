@@ -129,9 +129,10 @@ async function approveAllConsultants(page) {
   // Create a dedicated browser context that auto-responds to the ADFS HTTP auth
   // challenge (adfs.arvind.in presents WWW-Authenticate: Negotiate/NTLM).
   const browser = page.context().browser();
-  const context = await browser.newContext({
-    httpCredentials: { username: USERNAME, password: PASSWORD },
-  });
+  // No httpCredentials — ADFS auth is handled by filling the HTML form below.
+  // Setting httpCredentials would cause Chromium to send NTLM headers to ALL
+  // sites, which confuses consultantmgmt.onearvind.com (ASP.NET NullRefException).
+  const context = await browser.newContext();
   const cPage = await context.newPage();
 
   try {
