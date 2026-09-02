@@ -1,19 +1,31 @@
-# 🤖 Darwinbox Attendance Auto-Regularizer
+# 🤖 Darwinbox Automation
 
-Automates attendance regularization in Darwinbox using Playwright, with optional post-run email summary.
+Automates daily Darwinbox tasks via GitHub Actions — attendance regularization, leave & time correction approvals, consultant & intern payment approvals, and a summary email.
+
+## What it does
+
+| Step | Module |
+|---|---|
+| 1. Login | `browser.js` |
+| 2. Attendance Regularization | `attendance-orchestrator.js` |
+| 3. Leave & Time Correction Approvals | `leave-approval.js` |
+| 4. Consultant & Intern Approvals | `consultant-approval.js` |
+| 5. Summary Email | `email.js` |
 
 ## Project Structure
 
 ```text
-├── index.js                    # Entry point: env validation, run orchestration, email trigger
-├── browser.js                  # Browser launch + login/MFA handling
+├── index.js                    # Entry point: orchestration and step sequencing
+├── browser.js                  # Browser launch, login, MFA handling
 ├── attendance-orchestrator.js  # Month/date orchestration and retry policy
 ├── attendance-page.js          # Attendance page navigation helpers
 ├── attendance-scan.js          # Scan rows + verification helpers
 ├── attendance-actions.js       # UI actions (menu open, modal open, submit)
 ├── attendance-constants.js     # Retry/time constants
+├── leave-approval.js           # Leave request + time correction approvals
+├── consultant-approval.js      # Consultant & intern payment approvals
 ├── reason.js                   # Reason dropdown selection logic
-├── email.js                    # SMTP summary email sender
+├── email.js                    # SMTP summary email
 ├── config.js                   # Runtime env configuration
 ├── utils.js                    # Shared utility helpers
 └── .github/workflows/darwinbox.yml
@@ -30,11 +42,8 @@ Go to **Settings → Secrets and variables → Actions** and add:
 - `DARWINBOX_PASSWORD`
 - `DARWINBOX_EMPLOYEE_ID`
 - `DARWINBOX_TOTP_SECRET` (if your tenant requires TOTP)
-- `GITHUB_TOKEN`
 
-### 2) Optional email summary secrets
-
-Add these only if you want post-run email:
+### 2) Optional: email summary secrets
 
 - `SMTP_HOST`
 - `SMTP_PORT`
@@ -42,37 +51,30 @@ Add these only if you want post-run email:
 - `SMTP_USER`
 - `SMTP_PASS`
 - `SMTP_FROM`
-- `REPORT_EMAIL_TO` (fallback recipient if `DARWINBOX_USERNAME` is not an email)
+- `REPORT_EMAIL_TO` (fallback if `DARWINBOX_USERNAME` is not an email address)
 
 ## Schedule
 
-Workflow currently runs daily at `30 4 * * *` (4:30 UTC).
+Workflow runs daily at `30 4 * * *` (4:30 UTC / 10:00 IST).
 
-## Runtime behavior (high level)
+## Attendance Regularization
 
-1. Login to Darwinbox.
-2. Open attendance page (current month, and previous month for days 1–4).
-3. Find eligible absent dates.
-4. Load repo-configured Outdoor Duty dates from `outdoor-duty-dates.csv`.
-5. For each date, try reasons in configured priority order. Outdoor Duty CSV matches try `Outdoor Duty` first, then the remaining reasons.
-6. Retry each reason attempt up to configured limit.
-7. Verify badge after submission; if verification fails, try next reason.
-8. Send summary email (if SMTP is configured).
+1. Opens attendance page for the current month (and previous month on days 1–4).
+2. Finds eligible absent dates.
+3. Loads Outdoor Duty dates from `outdoor-duty-dates.csv`.
+4. For each date, tries reasons in configured priority order — Outdoor Duty CSV matches try `Outdoor Duty` first.
+5. Retries each reason up to the configured limit.
+6. Verifies badge after submission; moves to next reason on failure.
 
-## Reason priority
+### Reason priority
 
-Default order:
+Default: Forgot To Punch → Outdoor Duty → Work From Home → In / Out Swiping Mistake
 
-1. Forgot To Punch
-2. Outdoor Duty
-3. Work From Home
-4. In / Out Swiping Mistake
+Override with env var `DARWINBOX_REASON_PRIORITY` (comma-separated).
 
-Override using env var `DARWINBOX_REASON_PRIORITY` (comma-separated).
+### Outdoor Duty dates
 
-## Outdoor Duty dates
-
-Add Outdoor Duty dates to `outdoor-duty-dates.csv` using a single `date` column in `DD-MM-YYYY` format:
+Add dates to `outdoor-duty-dates.csv` (single `date` column, `DD-MM-YYYY`):
 
 ```csv
 date
@@ -80,19 +82,15 @@ date
 12-05-2026
 ```
 
-When an absent date is present in this CSV, the script tries `Outdoor Duty` first for that date, followed by the rest of the configured reason priority. If the CSV is missing, unreadable, missing the `date` header, or contains an invalid date, the run fails before regularization starts.
-
-## Troubleshooting
-
-- **SMTP Gmail error 534 / app password required**
-  - Use Gmail App Password with 2FA enabled, not your normal account password.
-- **Email skipped due to missing SMTP vars**
-  - Ensure all `SMTP_*` secrets are mapped in workflow env.
-- **Verification fails after submit**
-  - Script treats this as failed for that reason and moves to next configured reason.
+If the CSV is missing, unreadable, or contains an invalid date, the run fails before regularization starts.
 
 ## Security
 
-- **Keep this repository private.** This is not optional. Every run uploads debug screenshots (login UI, attendance dates, employee ID, partially-masked MFA phone number) as a GitHub Actions artifact, and Actions logs may include other run details. On a public repo, both the artifacts and the logs are visible to anyone with the URL — there is no way to make those debugging aids work safely on a public repo.
-- Use GitHub Secrets for all credentials — never hardcode usernames/passwords/tokens in code or commit a `.env` file.
-- The bundled `.gitignore` blocks `*.png`/`.env*` from being committed, but that only prevents *new* accidental commits — it does not protect Actions artifact/log visibility once the repo is public.
+- **Keep this repository private.** Actions logs and artifacts may contain login UI screenshots, employee ID, and partially-masked MFA details — all visible to anyone if the repo is public.
+- Use GitHub Secrets for all credentials. Never hardcode or commit a `.env` file.
+
+## Troubleshooting
+
+- **Gmail SMTP error 534** — Use an App Password (requires 2FA), not your account password.
+- **Email skipped** — Ensure all `SMTP_*` secrets are present and mapped in the workflow env.
+- **Verification fails after submit** — Script moves to the next configured reason automatically.
