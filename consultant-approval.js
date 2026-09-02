@@ -158,7 +158,14 @@ async function approveAllConsultants(page) {
       console.log(`   ✅ ADFS auth complete — now at: ${cPage.url()}`);
     }
 
-    // Step 3: Navigate to the dashboard — .onearvind.com cookie is now set.
+    // Step 3: Navigate to the consultantmgmt ROOT first (mirrors clicking the link
+    // from onearvind.com — the root may initialize ASP.NET session state that
+    // /Approver/ManagerDashboard depends on).
+    console.log("   🔐 Navigating to consultantmgmt root...");
+    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: 60000 });
+    console.log(`   📍 After root nav: ${cPage.url()} | title: ${await cPage.title()}`);
+
+    // Step 4: Navigate to the dashboard.
     console.log("   🔐 Navigating to consultant dashboard...");
     await cPage.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: 60000 });
     console.log(`   📍 After dashboard nav: ${cPage.url()} | title: ${await cPage.title()}`);
