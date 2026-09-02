@@ -45,7 +45,11 @@ async function approveConsultant(page, consultant) {
     `${CONSULTANT_BASE}/Consultant/ConsultantEntry?PaymentID=${PaymentID}`,
     { waitUntil: "domcontentloaded" }
   );
-  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_TIMEOUT });
+  await page.waitForSelector("#hdnDivID", { state: "attached", timeout: DETAIL_TIMEOUT });
+  await page.waitForFunction(
+    () => (document.querySelector("#hdnDivID")?.value ?? "") !== "",
+    { timeout: DETAIL_TIMEOUT }
+  );
 
   const divID = await page.evaluate(() => document.querySelector("#hdnDivID")?.value ?? "");
   if (!divID) throw new Error(`hdnDivID is empty for PaymentID ${PaymentID}`);
@@ -81,7 +85,11 @@ async function approveIntern(page, intern) {
     `${CONSULTANT_BASE}/Consultant/InternPaymentEntry?InternPaymentID=${InternPaymentID}`,
     { waitUntil: "domcontentloaded" }
   );
-  await page.waitForSelector("#hdnDivID", { timeout: DETAIL_TIMEOUT });
+  await page.waitForSelector("#hdnDivID", { state: "attached", timeout: DETAIL_TIMEOUT });
+  await page.waitForFunction(
+    () => (document.querySelector("#hdnDivID")?.value ?? "") !== "",
+    { timeout: DETAIL_TIMEOUT }
+  );
 
   const { divID, remarks } = await page.evaluate(() => ({
     divID:   document.querySelector("#hdnDivID")?.value ?? "",
