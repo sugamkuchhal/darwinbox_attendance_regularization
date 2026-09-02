@@ -1,8 +1,8 @@
 // Approves all pending Consultant and Intern payments on consultantmgmt.onearvind.com.
 // Auth: creates a separate browser context that handles the ADFS HTTP auth challenge
-// using Arvind AD credentials (ARVIND_USER / ARVIND_PASS env vars).
+// using Arvind AD credentials (same DARWINBOX_USERNAME / DARWINBOX_PASSWORD).
 
-const { ARVIND_USER, ARVIND_PASS } = require("./config");
+const { USERNAME, PASSWORD } = require("./config");
 
 const CONSULTANT_BASE = "https://consultantmgmt.onearvind.com";
 const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
@@ -121,8 +121,8 @@ async function approveAllConsultants(page) {
     interns:     { approved: 0, failed: 0, records: [] },
   };
 
-  if (!ARVIND_USER || !ARVIND_PASS) {
-    console.error("❌ ARVIND_USER / ARVIND_PASS not set — skipping consultant approvals");
+  if (!USERNAME || !PASSWORD) {
+    console.error("❌ DARWINBOX_USERNAME / DARWINBOX_PASSWORD not set — skipping consultant approvals");
     return result;
   }
 
@@ -130,7 +130,7 @@ async function approveAllConsultants(page) {
   // challenge (adfs.arvind.in presents WWW-Authenticate: Negotiate/NTLM).
   const browser = page.context().browser();
   const context = await browser.newContext({
-    httpCredentials: { username: ARVIND_USER, password: ARVIND_PASS },
+    httpCredentials: { username: USERNAME, password: PASSWORD },
   });
   const cPage = await context.newPage();
 
