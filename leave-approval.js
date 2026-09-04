@@ -191,10 +191,18 @@ async function approveAllLeaveRequests(page) {
     label: "time corrections",
   });
 
-  console.log(`\n✅ Task approvals done. Leave: ${leaveResult.approved} approved. Time Correction: ${tcResult.approved} approved.`);
+  const ohResult = await approveCategory(page, {
+    tabName: "Optional Holiday Requests",
+    categoryValue: "leave_task_oh",
+    approveSelector: 'DBX-DS-BUTTON[data-action="request_optional_holiday_approve"]',
+    label: "optional holiday requests",
+  });
+
+  console.log(`\n✅ Task approvals done. Leave: ${leaveResult.approved} approved. Time Correction: ${tcResult.approved} approved. Optional Holiday: ${ohResult.approved} approved.`);
   return {
     leave: leaveResult,
     timeCorrection: tcResult,
+    optionalHoliday: ohResult,
   };
 }
 

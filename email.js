@@ -82,6 +82,15 @@ async function sendSummaryEmail(summary, taskApprovals = null, consultantApprova
     ...(tcRecords.length ? tcRecords.map((r) => `  - ${r}`) : ["  - none"]),
   ].join("\n");
 
+  // ── Optional Holiday ──
+  const ohApproved = taskApprovals?.optionalHoliday?.approved ?? null;
+  const ohRecords = taskApprovals?.optionalHoliday?.records ?? [];
+  const ohBlock = [
+    `OPTIONAL HOLIDAY REQUESTS`,
+    `  Approved : ${ohApproved ?? "not run"}`,
+    ...(ohRecords.length ? ohRecords.map((r) => `  - ${r}`) : ["  - none"]),
+  ].join("\n");
+
   // ── Consultants ──
   const cApproved = consultantApprovals?.consultants?.approved ?? null;
   const cRecords = consultantApprovals?.consultants?.records ?? [];
@@ -113,6 +122,8 @@ async function sendSummaryEmail(summary, taskApprovals = null, consultantApprova
     leaveBlock,
     ``,
     tcBlock,
+    ``,
+    ohBlock,
     ``,
     consultantBlock,
     ``,
