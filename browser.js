@@ -144,6 +144,10 @@ async function handleStaySignedIn(page) {
 
 
 async function verifyLogin(page) {
+  // Microsoft's SAS/ProcessAuth is a transient redirect — wait it out before checking.
+  if (page.url().includes("login.microsoftonline.com")) {
+    await page.waitForURL(url => !url.includes("login.microsoftonline.com"), { timeout: 30000 }).catch(() => {});
+  }
   const url = page.url();
   const safeUrl = redactUrl(url);
   console.log(`✅ Post-login URL: ${safeUrl}`);
