@@ -65,20 +65,17 @@ async function handleMfaIfPresent(page) {
   const onMicrosoftPage = url.includes("login.microsoftonline") || url.includes("login.microsoft.com");
 
   // FIDO/passkey bridge — Microsoft routes here when passkey is configured.
-  // Headless Playwright has no authenticator, so switch to another method (TOTP).
+  // The page only has #idBtn_Back — click it to return to the method picker, then use TOTP.
   if (url.includes("bridge/fido")) {
-    console.log("🔑 FIDO/passkey page detected — dumping page HTML for selector analysis...");
-    await page.screenshot({ path: "fido_page.png", fullPage: true }).catch(() => {});
-    const fidoHtml = await page.content().catch(() => "");
-    // Log all anchor and button text so we can find the correct selector
-    const links = await page.$$eval("a, button", els =>
-      els.map(el => `${el.tagName} id="${el.id}" class="${el.className}" text="${(el.innerText||'').trim().slice(0,100)}"`)
-    ).catch(() => []);
-    console.log("🔍 FIDO page interactive elements:");
-    links.forEach(l => console.log("  " + l));
-    // Truncated HTML for analysis
-    console.log("🔍 FIDO page HTML (first 3000 chars):");
-    console.log(fidoHtml.slice(0, 3000));
+    console.log("🔑 FIDO/passkey page detected — clicking Back to reach method picker...");
+    try {
+      await page.click('#idBtn_Back', { timeout: 10000 });
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+      await sleep(2000);
+      console.log(`✅ Back clicked — now on: ${page.url()}`);
+    } catch (err) {
+      console.warn(`⚠️ Could not click Back on FIDO page: ${err.message}`);
+    }
   }
 
   const mfaVisible =
