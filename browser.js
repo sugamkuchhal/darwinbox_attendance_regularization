@@ -69,7 +69,8 @@ async function handleMfaIfPresent(page) {
   if (url.includes("bridge/fido")) {
     console.log("🔑 FIDO/passkey page detected — clicking Back to reach method picker...");
     try {
-      await page.click('#idBtn_Back', { timeout: 10000 });
+      // #lightbox-cover intercepts pointer events during WebAuthn ceremony — use JS click to bypass
+      await page.evaluate(() => document.getElementById('idBtn_Back').click());
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
       await sleep(2000);
       const afterUrl = page.url();
