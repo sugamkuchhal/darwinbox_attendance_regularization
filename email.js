@@ -13,12 +13,6 @@ function getRecipient() {
   return null;
 }
 
-function buildSubject(pendingCount) {
-  const prefix = pendingCount === 0 ? "[ALL GOOD]" : "[PENDING]";
-  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  return pendingCount === 0 ? `${prefix} Darwinbox · ${date}` : `${prefix} Darwinbox · ${date} (${pendingCount} unresolved)`;
-}
-
 function monthName(m) {
   return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1] ?? m;
 }
@@ -31,91 +25,156 @@ function line(char = "═", len = 40) {
   return char.repeat(len);
 }
 
-async function sendSummaryEmail(summary, taskApprovals = null, consultantApprovals = null) {
+function isAllGood({ loginError, summary, taskApprovals, consultantApprovals }) {
+  if (loginError) return false;
+  if (!summary || summary.error || (summary.failed && summary.failed.length > 0)) return false;
+  if (!taskApprovals || taskApprovals.error) return false;
+  if (!consultantApprovals || consultantApprovals.error) return false;
+  return true;
+}
+
+function buildSubject(allGood) {
+  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  return allGood
+    ? `[ALL GOOD] Darwinbox · ${date}`
+    : `[PENDING] Darwinbox · ${date}`;
+}
+
+async function sendSummaryEmail({ loginError, summary, taskApprovals, consultantApprovals }) {
   const recipient = getRecipient();
   if (!recipient) {
     console.log("⚠️ Email skipped: no valid recipient in DARWINBOX_USERNAME/REPORT_EMAIL_TO");
     return;
   }
 
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
+  const host   = process.env.SMTP_HOST;
+  const port   = Number(process.env.SMTP_PORT || 587);
   const secure = String(process.env.SMTP_SECURE || "false").toLowerCase() === "true";
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || user;
+  const user   = process.env.SMTP_USER;
+  const pass   = process.env.SMTP_PASS;
+  const from   = process.env.SMTP_FROM || user;
 
   if (!host || !port || !user || !pass || !from) {
     console.log("⚠️ Email skipped: missing SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM");
     return;
   }
 
-  const pendingDates = summary.failed || [];
-  const regularizedDates = summary.succeeded || [];
-  const pendingCount = pendingDates.length;
+  const date    = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const allGood = isAllGood({ loginError, summary, taskApprovals, consultantApprovals });
+  const subject = buildSubject(allGood);
 
-  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  const subject = buildSubject(pendingCount);
+  // ── Login ──
+  const loginBlock = loginError
+    ? `LOGIN\n  ❌ Failed: ${loginError}`
+    : `LOGIN\n  ✅ Success`;
 
   // ── Attendance ──
-  const attendanceBlock = [
-    `ATTENDANCE`,
-    `  Regularized : ${regularizedDates.length} dates`,
-    `  Pending     : ${pendingCount} dates` + (pendingDates.length ? ` (${pendingDates.join(", ")})` : ""),
-  ].join("\n");
+  let attendanceBlock;
+  if (loginError) {
+    attendanceBlock = `ATTENDANCE\n  - did not run (login failed)`;
+  } else if (!summary) {
+    attendanceBlock = `ATTENDANCE\n  - did not run`;
+  } else if (summary.error) {
+    attendanceBlock = `ATTENDANCE\n  ❌ Error: ${summary.error}`;
+  } else {
+    const regularizedDates = summary.succeeded || [];
+    const pendingDates     = summary.failed || [];
+    attendanceBlock = [
+      `ATTENDANCE`,
+      `  Regularized : ${regularizedDates.length} dates`,
+      `  Pending     : ${pendingDates.length} dates` + (pendingDates.length ? ` (${pendingDates.join(", ")})` : ""),
+    ].join("\n");
+  }
 
   // ── Leave ──
-  const leaveApproved = taskApprovals?.leave?.approved ?? null;
-  const leaveRecords = taskApprovals?.leave?.records ?? [];
-  const leaveBlock = [
-    `LEAVE APPROVALS`,
-    `  Approved : ${leaveApproved ?? "not run"}`,
-    ...(leaveRecords.length ? leaveRecords.map((r) => `  - ${r}`) : ["  - none"]),
-  ].join("\n");
+  let leaveBlock;
+  if (loginError || !taskApprovals) {
+    leaveBlock = `LEAVE APPROVALS\n  - did not run`;
+  } else if (taskApprovals.error) {
+    leaveBlock = `LEAVE APPROVALS\n  ❌ Error: ${taskApprovals.error}`;
+  } else {
+    const leaveApproved = taskApprovals?.leave?.approved ?? null;
+    const leaveRecords  = taskApprovals?.leave?.records ?? [];
+    leaveBlock = [
+      `LEAVE APPROVALS`,
+      `  Approved : ${leaveApproved ?? "not run"}`,
+      ...(leaveRecords.length ? leaveRecords.map((r) => `  - ${r}`) : ["  - none"]),
+    ].join("\n");
+  }
 
   // ── Time Correction ──
-  const tcApproved = taskApprovals?.timeCorrection?.approved ?? null;
-  const tcRecords = taskApprovals?.timeCorrection?.records ?? [];
-  const tcBlock = [
-    `TIME CORRECTIONS`,
-    `  Approved : ${tcApproved ?? "not run"}`,
-    ...(tcRecords.length ? tcRecords.map((r) => `  - ${r}`) : ["  - none"]),
-  ].join("\n");
+  let tcBlock;
+  if (loginError || !taskApprovals) {
+    tcBlock = `TIME CORRECTIONS\n  - did not run`;
+  } else if (taskApprovals.error) {
+    tcBlock = `TIME CORRECTIONS\n  ❌ Error: ${taskApprovals.error}`;
+  } else {
+    const tcApproved = taskApprovals?.timeCorrection?.approved ?? null;
+    const tcRecords  = taskApprovals?.timeCorrection?.records ?? [];
+    tcBlock = [
+      `TIME CORRECTIONS`,
+      `  Approved : ${tcApproved ?? "not run"}`,
+      ...(tcRecords.length ? tcRecords.map((r) => `  - ${r}`) : ["  - none"]),
+    ].join("\n");
+  }
 
   // ── Optional Holiday ──
-  const ohApproved = taskApprovals?.optionalHoliday?.approved ?? null;
-  const ohRecords = taskApprovals?.optionalHoliday?.records ?? [];
-  const ohBlock = [
-    `OPTIONAL HOLIDAY REQUESTS`,
-    `  Approved : ${ohApproved ?? "not run"}`,
-    ...(ohRecords.length ? ohRecords.map((r) => `  - ${r}`) : ["  - none"]),
-  ].join("\n");
+  let ohBlock;
+  if (loginError || !taskApprovals) {
+    ohBlock = `OPTIONAL HOLIDAY REQUESTS\n  - did not run`;
+  } else if (taskApprovals.error) {
+    ohBlock = `OPTIONAL HOLIDAY REQUESTS\n  ❌ Error: ${taskApprovals.error}`;
+  } else {
+    const ohApproved = taskApprovals?.optionalHoliday?.approved ?? null;
+    const ohRecords  = taskApprovals?.optionalHoliday?.records ?? [];
+    ohBlock = [
+      `OPTIONAL HOLIDAY REQUESTS`,
+      `  Approved : ${ohApproved ?? "not run"}`,
+      ...(ohRecords.length ? ohRecords.map((r) => `  - ${r}`) : ["  - none"]),
+    ].join("\n");
+  }
 
   // ── Consultants ──
-  const cApproved = consultantApprovals?.consultants?.approved ?? null;
-  const cRecords = consultantApprovals?.consultants?.records ?? [];
-  const consultantBlock = [
-    `CONSULTANT PAYMENTS`,
-    `  Approved : ${cApproved ?? "not run"}`,
-    ...(cRecords.length
-      ? cRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
-      : ["  - none"]),
-  ].join("\n");
+  let consultantBlock;
+  if (loginError || !consultantApprovals) {
+    consultantBlock = `CONSULTANT PAYMENTS\n  - did not run`;
+  } else if (consultantApprovals.error) {
+    consultantBlock = `CONSULTANT PAYMENTS\n  ❌ Error: ${consultantApprovals.error}`;
+  } else {
+    const cApproved = consultantApprovals?.consultants?.approved ?? null;
+    const cRecords  = consultantApprovals?.consultants?.records ?? [];
+    consultantBlock = [
+      `CONSULTANT PAYMENTS`,
+      `  Approved : ${cApproved ?? "not run"}`,
+      ...(cRecords.length
+        ? cRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
+        : ["  - none"]),
+    ].join("\n");
+  }
 
   // ── Interns ──
-  const iApproved = consultantApprovals?.interns?.approved ?? null;
-  const iRecords = consultantApprovals?.interns?.records ?? [];
-  const internBlock = [
-    `INTERN PAYMENTS`,
-    `  Approved : ${iApproved ?? "not run"}`,
-    ...(iRecords.length
-      ? iRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
-      : ["  - none"]),
-  ].join("\n");
+  let internBlock;
+  if (loginError || !consultantApprovals) {
+    internBlock = `INTERN PAYMENTS\n  - did not run`;
+  } else if (consultantApprovals.error) {
+    internBlock = `INTERN PAYMENTS\n  ❌ Error: ${consultantApprovals.error}`;
+  } else {
+    const iApproved = consultantApprovals?.interns?.approved ?? null;
+    const iRecords  = consultantApprovals?.interns?.records ?? [];
+    internBlock = [
+      `INTERN PAYMENTS`,
+      `  Approved : ${iApproved ?? "not run"}`,
+      ...(iRecords.length
+        ? iRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
+        : ["  - none"]),
+    ].join("\n");
+  }
 
   const text = [
     `DARWINBOX AUTOMATION · ${date}`,
     line(),
+    ``,
+    loginBlock,
     ``,
     attendanceBlock,
     ``,
