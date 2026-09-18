@@ -136,8 +136,8 @@ async function handleMfaIfPresent(page) {
 async function handleStaySignedIn(page) {
   try {
     await page.click('input[value="Yes"], button:has-text("Yes")', { timeout: 5000 });
-    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
-    await sleep(2000);
+    // Wait until Microsoft redirects back to Darwinbox — SAS/ProcessAuth is a transient step.
+    await page.waitForURL(url => !url.includes("login.microsoftonline.com"), { timeout: 30000 }).catch(() => {});
     console.log("✅ Clicked 'Stay signed in'");
   } catch (_) {}
 }
