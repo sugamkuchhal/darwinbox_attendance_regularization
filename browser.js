@@ -61,7 +61,26 @@ async function enterCredentials(page) {
 }
 
 async function handleMfaIfPresent(page) {
-  const onMicrosoftPage = page.url().includes("login.microsoftonline");
+  const url = page.url();
+  const onMicrosoftPage = url.includes("login.microsoftonline") || url.includes("login.microsoft.com");
+
+  // FIDO/passkey bridge — Microsoft routes here when passkey is configured.
+  // Headless Playwright has no authenticator, so switch to another method (TOTP).
+  if (url.includes("bridge/fido")) {
+    console.log("🔑 FIDO/passkey page detected — switching to another sign-in method...");
+    try {
+      await page.click(
+        'a:has-text("Use a different method"), a:has-text("Sign in another way"), a:has-text("Other ways to sign in"), #signInAnotherWay',
+        { timeout: 10000 }
+      );
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+      console.log("✅ Switched away from FIDO page");
+    } catch (err) {
+      console.warn(`⚠️ Could not switch from FIDO page: ${err.message}`);
+    }
+  }
+
   const mfaVisible =
     (await page.$('text="Verify your identity"').catch(() => null)) ||
     (await page.$('text="Enter code"').catch(() => null))           ||
