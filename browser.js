@@ -72,7 +72,14 @@ async function handleMfaIfPresent(page) {
       await page.click('#idBtn_Back', { timeout: 10000 });
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
       await sleep(2000);
-      console.log(`✅ Back clicked — now on: ${page.url()}`);
+      const afterUrl = page.url();
+      console.log(`✅ Back clicked — now on: ${afterUrl}`);
+      // Dump elements so we know exactly what page we landed on
+      const afterElements = await page.$$eval("a, button, input", els =>
+        els.map(el => `${el.tagName} id="${el.id}" text="${(el.innerText||el.value||'').trim().slice(0,100)}"`)
+      ).catch(() => []);
+      console.log("🔍 Post-Back page elements:");
+      afterElements.forEach(e => console.log("  " + e));
     } catch (err) {
       console.warn(`⚠️ Could not click Back on FIDO page: ${err.message}`);
     }
