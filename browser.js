@@ -126,6 +126,50 @@ async function clickById(page, id) {
   }, id);
 }
 
+// A short fingerprint of the current screen, used to prove a click did something.
+async function pageSignature(page) {
+  return page
+    .evaluate(() => {
+      const otc = !!document.querySelector(
+        'input[name="otc"], input#otc, input[autocomplete="one-time-code"]'
+      );
+      return `${location.href}|${document.title}|${otc}|${(document.body.innerText || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 150)}`;
+    })
+    .catch(() => `err-${Date.now()}`);
+}
+
+// Microsoft renders several copies of the same option; only one is live.
+// Click each candidate until the screen demonstrably changes.
+async function clickUntilChanged(page, selectors, label) {
+  const before = await pageSignature(page);
+  for (const sel of selectors) {
+    let count = 0;
+    try {
+      count = await page.locator(sel).count();
+    } catch (_) {
+      continue;
+    }
+    for (let i = 0; i < Math.min(count, 6); i++) {
+      const el = page.locator(sel).nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      await el.click({ timeout: 4000 }).catch(async () => {
+        await el.evaluate((n) => n.click()).catch(() => {});
+      });
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 6000 }).catch(() => {});
+      await sleep(1800);
+      if ((await pageSignature(page)) !== before) {
+        console.log(`✅ [${label}] advanced via ${sel} #${i}`);
+        return true;
+      }
+    }
+  }
+  console.warn(`⚠️ [${label}] no candidate advanced the page`);
+  return false;
+}
+
 async function dumpPage(page, label) {
   const info = await page
     .evaluate(() => ({
@@ -176,6 +220,7 @@ async function submitTotp(page) {
     await box.type(code, { delay: 40 }).catch(() => {});
     await sleep(300);
     const clicked =
+      (await clickById(page, "idSubmit_SAOTCC_Continue")) ||
       (await clickById(page, "idSIButton9")) ||
       (await clickByText(page, "verify|sign in|submit|next|continue"));
     if (!clicked) await page.keyboard.press("Enter").catch(() => {});
@@ -202,6 +247,7 @@ async function resolveAuth(page) {
   let lastSignature = "";
   let stuckRounds = 0;
   let totpTried = 0;
+  let pickerAttempted = false;
 
   while (Date.now() < deadline) {
     round++;
@@ -256,16 +302,32 @@ async function resolveAuth(page) {
       continue;
     }
 
-    // 3. Method picker — choose authenticator-app code
-    const picked = await clickByText(
-      page,
-      "authenticator app|verification code|use a code|enter a code|totp|authenticator",
-      "face|fingerprint|security key|passkey|text|call|sms|email|password"
-    );
-    if (picked) {
-      console.log(`📲 Picked method: "${picked}"`);
-      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
-      await sleep(2000);
+    // 3. Method picker — choose the authenticator-app code option.
+    // Only attempt once; if no candidate advances the page, stop rather than spin.
+    if (/verify your identity|verification code|how would you like|choose a way|sign-?in options/i.test(
+        state.text + " " + state.title)) {
+      if (pickerAttempted) {
+        await dumpPage(page, "picker-no-advance");
+        throw new Error("Method picker did not respond to any verification-code option");
+      }
+      pickerAttempted = true;
+      console.log("📲 Method picker — selecting verification code");
+      const ok = await clickUntilChanged(
+        page,
+        [
+          '[data-value="PhoneAppOTP"]',
+          '[data-bind*="PhoneAppOTP"]',
+          '[role="button"]:has-text("Use a verification code")',
+          'div:has-text("Use a verification code")',
+          '[role="button"]:has-text("authenticator app")',
+          '[role="button"]:has-text("verification code")',
+        ],
+        "picker"
+      );
+      if (!ok) {
+        await dumpPage(page, "picker-no-advance");
+        throw new Error("Method picker did not respond to any verification-code option");
+      }
       continue;
     }
 
