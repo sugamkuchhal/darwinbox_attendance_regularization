@@ -1,15 +1,48 @@
 const { chromium } = require("playwright");
 const { DARWINBOX_URL, USERNAME, PASSWORD } = require("./config");
 const { sleep, redactUrl } = require("./utils");
-const { handleMFA, getTotpCodes } = require("./mfa");
+const { getTotpCodes } = require("./mfa");
 
 // ─── Browser setup ────────────────────────────────────────────────────────────
+
+// Headless Chromium has no authenticator, so a passkey prompt can never be
+// satisfied — it hangs forever behind an overlay. We make the browser report
+// no passkey support at all, and hard-cancel any ceremony that starts anyway.
+const KILL_WEBAUTHN = () => {
+  try {
+    delete Window.prototype.PublicKeyCredential;
+    delete window.PublicKeyCredential;
+    Object.defineProperty(window, "PublicKeyCredential", {
+      get: () => undefined,
+      configurable: true,
+    });
+  } catch (_) {}
+  try {
+    if (navigator.credentials) {
+      const orig = navigator.credentials.get
+        ? navigator.credentials.get.bind(navigator.credentials)
+        : null;
+      navigator.credentials.get = function (options) {
+        if (options && options.publicKey) {
+          return Promise.reject(
+            new DOMException(
+              "The operation either timed out or was not allowed.",
+              "NotAllowedError"
+            )
+          );
+        }
+        return orig ? orig(options) : Promise.resolve(null);
+      };
+    }
+  } catch (_) {}
+};
 
 async function launchBrowser() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
   });
+  await context.addInitScript(KILL_WEBAUTHN);
   const page = await context.newPage();
   return { browser, page };
 }
@@ -45,127 +78,228 @@ async function enterCredentials(page) {
   console.log("📧 Entering email...");
   await page.fill('input[type="email"], input[name="loginfmt"]', USERNAME);
   await sleep(500);
-  // Short timeout: after click the button detaches (SPA transition). The catch swallows
-  // the "not visible" retry error; waitForSelector below confirms the transition succeeded.
   await page.click('input[type="submit"], button[type="submit"]', { timeout: 5000 }).catch(() => {});
-  // Microsoft login is SPA-based — email→password is a JS transition, not a navigation.
-  // waitForSelector on the password field is reliable; waitForNavigation is not.
-  await page.waitForSelector('input[type="password"], input[name="passwd"]', { timeout: 15000 });
+  await page.waitForSelector('input[type="password"], input[name="passwd"], #i0118', { timeout: 15000 });
 
   console.log("🔑 Entering password...");
-  await page.fill('input[type="password"], input[name="passwd"]', PASSWORD);
+  await page.fill('input[type="password"], input[name="passwd"], #i0118', PASSWORD);
   await sleep(500);
   await page.click('input[type="submit"], button[type="submit"]', { timeout: 5000 }).catch(() => {});
   await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
   await sleep(2000);
 }
 
-async function handleMfaIfPresent(page) {
-  const url = page.url();
-  const onMicrosoftPage = url.includes("login.microsoftonline") || url.includes("login.microsoft.com");
+// ─── Page-state helpers ───────────────────────────────────────────────────────
 
-  // FIDO/passkey bridge — Microsoft routes here when passkey is configured.
-  // The page only has #idBtn_Back — click it to return to the method picker, then use TOTP.
-  if (url.includes("bridge/fido")) {
-    console.log("🔑 FIDO/passkey page detected — clicking Back to reach method picker...");
-    try {
-      // #lightbox-cover intercepts pointer events during WebAuthn ceremony — use JS click to bypass
-      await page.evaluate(() => document.getElementById('idBtn_Back').click());
-      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-      await sleep(2000);
-      const afterUrl = page.url();
-      console.log(`✅ Back clicked — now on: ${afterUrl}`);
-      // Dump elements so we know exactly what page we landed on
-      const afterElements = await page.$$eval("a, button, input", els =>
-        els.map(el => `${el.tagName} id="${el.id}" text="${(el.innerText||el.value||'').trim().slice(0,100)}"`)
-      ).catch(() => []);
-      console.log("🔍 Post-Back page elements:");
-      afterElements.forEach(e => console.log("  " + e));
-    } catch (err) {
-      console.warn(`⚠️ Could not click Back on FIDO page: ${err.message}`);
-    }
-  }
-
-  const mfaVisible =
-    (await page.$('text="Verify your identity"').catch(() => null)) ||
-    (await page.$('text="Enter code"').catch(() => null))           ||
-    (await page.$('input[name="otc"]').catch(() => null));
-
-  if (!onMicrosoftPage || !mfaVisible) {
-    console.log("ℹ️  No MFA prompt — continuing");
-    return;
-  }
-
-  async function submitCodeWithOneRetry(mfaResult) {
-    const now = Math.floor(Date.now() / 1000);
-    const secsIntoWindow = now % 30;
-    const secsToNext = 30 - secsIntoWindow;
-    console.log(`🧭 MFA debug: submitting code at ${new Date().toISOString()} (TOTP window +${secsIntoWindow}s, next in ${secsToNext}s)`);
-
-    const codeSelector = 'input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]';
-    const submitSelector = 'input[type="submit"], button[type="submit"]';
-    const codeTargets = await page.locator(codeSelector).count();
-    const submitTargets = await page.locator(submitSelector).count();
-    console.log(`🧭 MFA debug: code fields found=${codeTargets}, submit buttons found=${submitTargets}`);
-
-    await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.code);
-    await sleep(500);
-    await page.click('input[type="submit"], button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-    await sleep(2000);
-    const stillOnMicrosoft = page.url().includes("login.microsoftonline");
-    const stillNeedsCode = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
-    if (stillOnMicrosoft && stillNeedsCode && mfaResult.retryCode) {
-      console.warn("⚠️ MFA code did not pass. Waiting 30s and retrying once with next TOTP window...");
-      await sleep(30000);
-      const retryNow = Math.floor(Date.now() / 1000);
-      const retryIntoWindow = retryNow % 30;
-      const retryToNext = 30 - retryIntoWindow;
-      console.log(`🧭 MFA debug: retry submit at ${new Date().toISOString()} (TOTP window +${retryIntoWindow}s, next in ${retryToNext}s)`);
-      await page.fill('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]', mfaResult.retryCode);
-      await sleep(500);
-      await page.click('input[type="submit"], button[type="submit"]');
-      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
-      await sleep(2000);
-      return !(page.url().includes("login.microsoftonline") && await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null));
-    }
-    return true;
-  }
-
-  const codeInputVisible = await page.$('input[name="otc"], input[placeholder*="code"], input[placeholder*="Code"]').catch(() => null);
-  if (codeInputVisible) {
-    console.log("🔐 MFA code-entry screen detected first. Attempting direct TOTP flow.");
-    try {
-      const directTotp = getTotpCodes();
-      const codePassed = await submitCodeWithOneRetry(directTotp);
-      if (codePassed) {
-        console.log("✅ MFA direct TOTP flow completed");
-        return;
+// Click by visible text / aria-label via JS so overlays can't intercept.
+async function clickByText(page, preferRe, avoidRe) {
+  return page.evaluate(
+    ({ preferSrc, avoidSrc }) => {
+      const prefer = new RegExp(preferSrc, "i");
+      const avoid = avoidSrc ? new RegExp(avoidSrc, "i") : null;
+      const nodes = Array.from(
+        document.querySelectorAll(
+          'button, a, [role="button"], [role="link"], [role="listitem"], li, div[tabindex], input[type="submit"]'
+        )
+      );
+      for (const el of nodes) {
+        if (el.offsetParent === null && el.getClientRects().length === 0) continue;
+        const t = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim();
+        if (!t || t.length > 200) continue;
+        if (!prefer.test(t)) continue;
+        if (avoid && avoid.test(t)) continue;
+        el.click();
+        return t.slice(0, 80);
       }
-      console.warn("⚠️ Direct TOTP attempts failed. Trying fallback methods from picker...");
-    } catch (err) {
-      console.warn(`⚠️ Direct TOTP unavailable: ${err.message}. Falling back to picker methods...`);
-    }
-    try { await page.click('a:has-text("Sign in another way"), a:has-text("other way"), a:has-text("different")', { timeout: 5000 }); } catch (_) {}
-    await sleep(1500);
-  }
-
-  const mfaResult = await handleMFA(page);
-  if (mfaResult?.code) {
-    await submitCodeWithOneRetry(mfaResult);
-    console.log("✅ MFA code submitted");
-  }
+      return null;
+    },
+    { preferSrc: preferRe, avoidSrc: avoidRe || null }
+  );
 }
 
-async function handleStaySignedIn(page) {
+async function clickById(page, id) {
+  return page.evaluate((elId) => {
+    const el = document.getElementById(elId);
+    if (!el) return false;
+    el.click();
+    return true;
+  }, id);
+}
+
+async function dumpPage(page, label) {
+  const info = await page
+    .evaluate(() => ({
+      title: document.title,
+      text: (document.body.innerText || "").replace(/\s+/g, " ").trim().slice(0, 600),
+      els: Array.from(
+        document.querySelectorAll('button, a, [role="button"], input, [role="listitem"], li')
+      )
+        .filter((el) => el.offsetParent !== null || el.getClientRects().length)
+        .map((el) =>
+          `${el.tagName}#${el.id || "-"}[${el.getAttribute("name") || el.type || "-"}] "${(
+            el.innerText ||
+            el.value ||
+            el.getAttribute("aria-label") ||
+            ""
+          )
+            .trim()
+            .slice(0, 60)}"`
+        )
+        .slice(0, 40),
+    }))
+    .catch(() => null);
+  if (!info) return;
+  console.log(`🔍 [${label}] title="${info.title}"`);
+  console.log(`🔍 [${label}] text="${info.text}"`);
+  info.els.forEach((e) => console.log(`   ${e}`));
+}
+
+const OTC_SEL =
+  'input[name="otc"], input#otc, input[autocomplete="one-time-code"], input[inputmode="numeric"]';
+
+async function submitTotp(page) {
+  let codes;
   try {
-    await page.click('input[value="Yes"], button:has-text("Yes")', { timeout: 5000 });
-    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
-    await sleep(2000);
-    console.log("✅ Clicked 'Stay signed in'");
-  } catch (_) {}
+    codes = getTotpCodes();
+  } catch (err) {
+    console.warn(`⚠️ TOTP unavailable: ${err.message}`);
+    return false;
+  }
+  for (const [i, code] of [codes.code, codes.retryCode].entries()) {
+    if (i > 0) {
+      console.log("🔄 Retrying with next TOTP window (waiting 30s)...");
+      await sleep(30000);
+    }
+    const box = await page.$(OTC_SEL);
+    if (!box) return false;
+    await box.fill("").catch(() => {});
+    await box.type(code, { delay: 40 }).catch(() => {});
+    await sleep(300);
+    const clicked =
+      (await clickById(page, "idSIButton9")) ||
+      (await clickByText(page, "verify|sign in|submit|next|continue"));
+    if (!clicked) await page.keyboard.press("Enter").catch(() => {});
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+    await sleep(2500);
+    const stillOtc = await page.$(OTC_SEL);
+    if (!stillOtc) {
+      console.log("✅ TOTP accepted");
+      return true;
+    }
+    console.warn("⚠️ TOTP not accepted on this attempt");
+  }
+  return false;
 }
 
+// ─── Auth resolver ────────────────────────────────────────────────────────────
+// Microsoft's new sign-in can present these pages in any order and any
+// combination. Rather than assume one sequence, look at what's on screen each
+// round and act, until Darwinbox is reached.
+async function resolveAuth(page) {
+  const host = new URL(DARWINBOX_URL).hostname;
+  const deadline = Date.now() + 4 * 60 * 1000;
+  let round = 0;
+  let lastSignature = "";
+  let stuckRounds = 0;
+  let totpTried = 0;
+
+  while (Date.now() < deadline) {
+    round++;
+    const url = page.url();
+    if (url.includes(host)) {
+      console.log(`✅ Reached Darwinbox after ${round} round(s)`);
+      return;
+    }
+
+    const state = await page
+      .evaluate(
+        ({ otcSel }) => ({
+          otc: !!document.querySelector(otcSel),
+          pwd: !!document.querySelector('input[type="password"]'),
+          title: document.title,
+          text: (document.body.innerText || "").replace(/\s+/g, " ").trim().slice(0, 300),
+        }),
+        { otcSel: OTC_SEL }
+      )
+      .catch(() => ({ otc: false, pwd: false, title: "", text: "" }));
+
+    const signature = `${url}|${state.title}|${state.text.slice(0, 120)}`;
+    stuckRounds = signature === lastSignature ? stuckRounds + 1 : 0;
+    lastSignature = signature;
+
+    console.log(`↻ [round ${round}] ${redactUrl(url)} — "${state.title}"`);
+
+    // 1. Code entry screen
+    if (state.otc) {
+      if (totpTried >= 2) {
+        throw new Error("TOTP rejected repeatedly — check DARWINBOX_TOTP_SECRET");
+      }
+      totpTried++;
+      console.log("🔢 Code entry detected — submitting TOTP");
+      await submitTotp(page);
+      continue;
+    }
+
+    // 2. Passkey / security key screen — leave it
+    if (url.includes("bridge/fido") || /face, fingerprint|security key|passkey/i.test(state.title + " " + state.text)) {
+      console.log("🔑 Passkey screen — switching to another method");
+      const left =
+        (await clickByText(page, "other ways to sign in|different method|another way|use a code|can't use")) ||
+        (await clickById(page, "idA_PWD_SwitchToCredPicker")) ||
+        (await clickById(page, "idBtn_Back"));
+      if (!left) {
+        await dumpPage(page, "fido-stuck");
+        await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
+      }
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+      continue;
+    }
+
+    // 3. Method picker — choose authenticator-app code
+    const picked = await clickByText(
+      page,
+      "authenticator app|verification code|use a code|enter a code|totp|authenticator",
+      "face|fingerprint|security key|passkey|text|call|sms|email|password"
+    );
+    if (picked) {
+      console.log(`📲 Picked method: "${picked}"`);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+      continue;
+    }
+
+    // 4. Stay signed in / consent
+    if (/stay signed in|keep me signed in|reduce the number of times/i.test(state.text)) {
+      console.log("💾 'Stay signed in' — confirming");
+      (await clickById(page, "idSIButton9")) || (await clickByText(page, "^yes$|stay signed in"));
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+      continue;
+    }
+
+    // 5. Generic continue on an interstitial
+    if (stuckRounds >= 1) {
+      const advanced =
+        (await clickById(page, "idSIButton9")) ||
+        (await clickByText(page, "^next$|^continue$|^sign in$|^yes$|^ok$"));
+      if (advanced) {
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+        await sleep(2000);
+        continue;
+      }
+    }
+
+    // 6. Nothing recognised
+    if (stuckRounds >= 3) {
+      await dumpPage(page, "unrecognised");
+      throw new Error(`Stuck on unrecognised page: ${redactUrl(url)} — "${state.title}"`);
+    }
+    await sleep(2500);
+  }
+  await dumpPage(page, "timeout");
+  throw new Error("Timed out resolving Microsoft sign-in");
+}
 
 async function verifyLogin(page) {
   const url = page.url();
@@ -184,8 +318,7 @@ async function login(page) {
   await navigateToLogin(page);
   await clickSsoButton(page);
   await enterCredentials(page);
-  await handleMfaIfPresent(page);
-  await handleStaySignedIn(page);
+  await resolveAuth(page);
   await verifyLogin(page);
 }
 
