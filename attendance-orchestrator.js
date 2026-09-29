@@ -53,9 +53,10 @@ async function runMonthContext(page, monthContext, outdoorDutyDates) {
   console.log("=".repeat(60));
   await reloadForContext();
   const absentDates = await findAbsentDates(page);
+  const scanned = (findAbsentDates.lastScan || []).map(r => ({ ...r, monthContext }));
   if (absentDates.length === 0) {
     console.log(`✅ No absent days to regularize in ${monthContext} month`);
-    return { succeeded: [], failed: [] };
+    return { succeeded: [], failed: [], scanned };
   }
   console.log(`📋 ${absentDates.length} absent day(s): ${absentDates.join(", ")}`);
 
@@ -65,7 +66,7 @@ async function runMonthContext(page, monthContext, outdoorDutyDates) {
     (ok ? results.succeeded : results.failed).push(date);
   }
   logMonthSummary(monthContext, results);
-  return results;
+  return { ...results, scanned };
 }
 
 // Executes one end-to-end submit attempt for a specific date/reason.
@@ -133,12 +134,13 @@ async function processDate(page, date, reloadView, outdoorDutyDates, monthContex
 async function regularizeAttendance(page) {
   const outdoorDutyDates = loadOutdoorDutyDates();
   const monthContexts    = buildMonthContexts();
-  const overall          = { succeeded: [], failed: [] };
+  const overall          = { succeeded: [], failed: [], scanned: [], monthContexts };
 
   for (const monthContext of monthContexts) {
     const results = await runMonthContext(page, monthContext, outdoorDutyDates);
     overall.succeeded.push(...results.succeeded.map(d => `${d} (${monthContext})`));
     overall.failed.push(...results.failed.map(d => `${d} (${monthContext})`));
+    overall.scanned.push(...(results.scanned || []));
   }
 
   logOverallSummary(overall);

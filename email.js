@@ -79,11 +79,21 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   } else {
     const regularizedDates = summary.succeeded || [];
     const pendingDates     = summary.failed || [];
-    attendanceBlock = [
-      `ATTENDANCE`,
-      `  Regularized : ${regularizedDates.length} dates`,
-      `  Pending     : ${pendingDates.length} dates` + (pendingDates.length ? ` (${pendingDates.join(", ")})` : ""),
-    ].join("\n");
+    const scanned          = summary.scanned || [];
+    const months           = summary.monthContexts || [];
+    const skipped          = scanned.filter(
+      (r) => r.decision && r.decision !== "REGULARIZE" && !/today or future/.test(r.decision)
+    );
+
+    const lines = [`ATTENDANCE`];
+    if (months.length) lines.push(`  Checked     : ${months.join(" + ")} month`);
+    lines.push(`  Regularized : ${regularizedDates.length}`);
+    regularizedDates.forEach((d) => lines.push(`      - ${d}`));
+    lines.push(`  Pending     : ${pendingDates.length}`);
+    pendingDates.forEach((d) => lines.push(`      - ${d}`));
+    lines.push(`  Not actioned: ${skipped.length}`);
+    skipped.forEach((r) => lines.push(`      - ${r.date} | ${r.status} | ${r.decision.replace(/^skip: /, "")}`));
+    attendanceBlock = lines.join("\n");
   }
 
   // ── Leave ──

@@ -15,9 +15,10 @@ async function findAbsentDates(page) {
   const todayStr = getTodayStrIST();
   console.log(`📅 Today (IST): ${todayStr}`);
 
-  const { results, skippedExisting, totalRows } = await page.evaluate((today) => {
+  const { results, skippedExisting, seenRows, totalRows } = await page.evaluate((today) => {
     const results         = [];
-    const skippedExisting = []; // only "request already exists" — actionable info
+    const skippedExisting = []; // request already raised — actionable info
+    const seenRows        = []; // every dated row we saw, with why we did/didn't act
     const seen            = new Set();
 
     function toNum(s) {
@@ -35,30 +36,37 @@ async function findAbsentDates(page) {
       if (!dateSpan) continue;
       const dateStr = (dateSpan.innerText || "").trim();
       if (!/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) continue;
-      if (seen.has(dateStr) || toNum(dateStr) >= todayNum) continue;
+      if (seen.has(dateStr)) continue;
       seen.add(dateStr);
 
       const attendanceSpan   = row.querySelector('td.primary-cell.sorting_1 span#dbx-overflow-span');
       const attendanceStatus = (attendanceSpan?.innerText || "").trim();
       const hasRequestBadge  = !!row.querySelector('dbx-ds-status-tag');
 
-      if (attendanceStatus !== "Absent") continue;
+      let decision;
+      if (toNum(dateStr) >= todayNum)          decision = "skip: today or future";
+      else if (attendanceStatus !== "Absent")  decision = `skip: status is "${attendanceStatus || "(blank)"}"`;
+      else if (hasRequestBadge)                decision = "skip: request already raised";
+      else                                     decision = "REGULARIZE";
 
-      if (hasRequestBadge) {
-        skippedExisting.push(dateStr);
-        continue;
-      }
+      seenRows.push({ date: dateStr, status: attendanceStatus || "(blank)", badge: hasRequestBadge, decision });
 
-      results.push(dateStr);
+      if (decision === "REGULARIZE")                     results.push(dateStr);
+      else if (decision === "skip: request already raised") skippedExisting.push(dateStr);
     }
 
-    return { results, skippedExisting, totalRows };
+    return { results, skippedExisting, seenRows, totalRows };
   }, todayStr);
 
-  console.log(`🔍 Scanned ${totalRows} rows — ${results.length} to regularize, ${skippedExisting.length} already pending`);
-  if (skippedExisting.length) {
-    console.log(`   ⏭️  Already pending: ${skippedExisting.join(", ")}`);
+  console.log(`🔍 Scanned ${totalRows} rows — ${seenRows.length} dated rows found`);
+  console.log(`📋 Every date seen (status → decision):`);
+  for (const r of seenRows) {
+    const mark = r.decision === "REGULARIZE" ? "✅" : "  ";
+    console.log(`   ${mark} ${r.date} | status="${r.status}" | badge=${r.badge ? "yes" : "no"} → ${r.decision}`);
   }
+  console.log(`🔍 ${results.length} to regularize, ${skippedExisting.length} already pending`);
+
+  findAbsentDates.lastScan = seenRows;
   return results;
 }
 
