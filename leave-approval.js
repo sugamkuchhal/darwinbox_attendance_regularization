@@ -31,13 +31,40 @@ async function extractFirstRowInfo(page, approveSelector) {
     if (!btn) return null;
     const row = btn.closest("tr");
     if (!row) return null;
+    const table = row.closest("table");
+    const heads = table
+      ? [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim())
+      : [];
     const cells = [...row.querySelectorAll("td")].map((td) => {
       const clone = td.cloneNode(true);
       clone.querySelectorAll("DBX-DS-BUTTON, button, a").forEach((el) => el.remove());
       return clone.textContent.trim().replace(/\s+/g, " ");
-    }).filter((t) => t.length > 0);
-    return cells;
+    });
+    const byHeader = {};
+    heads.forEach((h, i) => { if (h && cells[i]) byHeader[h] = cells[i]; });
+    return { byHeader, cells: cells.filter((t) => t.length > 0) };
   }, approveSelector);
+}
+
+// Prefer named columns (Employee Name / Type / Applied For) over cell position,
+// so the record shows the date the request is FOR, not when it was submitted.
+function formatRow(info) {
+  if (!info) return null;
+  const h = info.byHeader || {};
+  const pick = (...names) => {
+    for (const n of names) {
+      const key = Object.keys(h).find((k) => k.toLowerCase().includes(n));
+      if (key && h[key]) return h[key];
+    }
+    return null;
+  };
+  const parts = [
+    pick("employee name", "requested for"),
+    pick("type", "flow name"),
+    pick("applied for"),
+  ].filter(Boolean);
+  if (parts.length) return parts.join(" | ");
+  return (info.cells || []).slice(0, 2).join(" | ") || null;
 }
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
@@ -115,14 +142,14 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
   }
 
   console.log(`📋 ${initialCount} pending ${label}`);
-  const results = { approved: 0, failed: 0, records: [] };
+  const results = { approved: 0, failed: 0, records: [], failedRecords: [] };
 
   while (true) {
     const countBefore = await countButtons(page, approveSelector);
     if (countBefore === 0) break;
 
     const rowInfo = await extractFirstRowInfo(page, approveSelector);
-    const rowLabel = rowInfo ? rowInfo.slice(0, 2).join(" | ") : "unknown";
+    const rowLabel = formatRow(rowInfo) || "unknown";
     console.log(`\n   🖊️  Approving: ${rowLabel} (${countBefore} remaining)...`);
 
     try {
@@ -133,6 +160,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
       console.warn(`   ⚠️ Click failed: ${err.message}`);
       await takeStepScreenshot(page, `${label.replace(/ /g,"_")}_click_failed.png`, "click failed", { log: true });
       results.failed++;
+      results.failedRecords.push(`${rowLabel} — ${err.message}`);
       break;
     }
 
@@ -145,7 +173,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
     if (!tableFound) {
       console.log(`   ✅ Approved (Task Box exited — all ${label} processed)`);
       results.approved++;
-      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
+      if (rowInfo) results.records.push(formatRow(rowInfo));
       break;
     }
 
@@ -153,7 +181,7 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
     if (!onTabAfter) {
       console.log(`   ✅ Approved (${tabName} tab removed — 0 remaining)`);
       results.approved++;
-      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
+      if (rowInfo) results.records.push(formatRow(rowInfo));
       break;
     }
 
@@ -162,11 +190,12 @@ async function approveCategory(page, { tabName, categoryValue, approveSelector, 
       const delta = countBefore - countAfter;
       console.log(`   ✅ Approved (${delta} removed, ${countAfter} remaining)`);
       results.approved += delta;
-      if (rowInfo) results.records.push(rowInfo.slice(0, 2).join(" | "));
+      if (rowInfo) results.records.push(formatRow(rowInfo));
     } else {
       console.warn(`   ⚠️ Count unchanged after approval — stopping`);
       await takeStepScreenshot(page, `${label.replace(/ /g,"_")}_unchanged.png`, "count unchanged", { log: true });
       results.failed++;
+      results.failedRecords.push(`${rowLabel} — approval did not take effect`);
       break;
     }
   }

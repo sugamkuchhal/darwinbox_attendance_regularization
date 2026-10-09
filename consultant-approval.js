@@ -114,8 +114,8 @@ async function approveIntern(page, intern) {
 
 async function approveAllConsultants(page) {
   const result = {
-    consultants: { approved: 0, failed: 0, records: [] },
-    interns:     { approved: 0, failed: 0, records: [] },
+    consultants: { approved: 0, failed: 0, records: [], failedRecords: [] },
+    interns:     { approved: 0, failed: 0, records: [], failedRecords: [] },
   };
 
   if (!USERNAME || !PASSWORD) {
@@ -150,6 +150,7 @@ async function approveAllConsultants(page) {
       console.log(`   📌 Pending consultants: ${pendingConsultants.length}`);
     } catch (err) {
       console.error(`   ❌ Failed to fetch pending consultants: ${err.message}`);
+      result.error = `could not read pending list — ${err.message}`;
     }
 
     try {
@@ -157,6 +158,7 @@ async function approveAllConsultants(page) {
       console.log(`   📌 Pending interns: ${pendingInterns.length}`);
     } catch (err) {
       console.error(`   ❌ Failed to fetch pending interns: ${err.message}`);
+      result.error = `could not read pending list — ${err.message}`;
     }
 
     for (const consultant of pendingConsultants) {
@@ -167,6 +169,7 @@ async function approveAllConsultants(page) {
       } catch (err) {
         console.error(`   ❌ ${consultant.EmpName}: ${err.message}`);
         result.consultants.failed++;
+        result.consultants.failedRecords.push(`${consultant.EmpName} (${consultant.EmpNo}) — ${err.message}`);
       }
     }
 
@@ -178,11 +181,13 @@ async function approveAllConsultants(page) {
       } catch (err) {
         console.error(`   ❌ ${intern.EmpName}: ${err.message}`);
         result.interns.failed++;
+        result.interns.failedRecords.push(`${intern.EmpName} (${intern.EmpNo}) — ${err.message}`);
       }
     }
 
   } catch (err) {
     console.error(`   ❌ Could not complete approvals: ${err.message}`);
+    result.error = err.message;
   } finally {
     await context.close();
   }

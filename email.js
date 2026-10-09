@@ -30,7 +30,29 @@ function isAllGood({ loginError, summary, taskApprovals, consultantApprovals }) 
   if (!summary || summary.error || (summary.failed && summary.failed.length > 0)) return false;
   if (!taskApprovals || taskApprovals.error) return false;
   if (!consultantApprovals || consultantApprovals.error) return false;
+  const buckets = [
+    taskApprovals.leave, taskApprovals.timeCorrection, taskApprovals.optionalHoliday,
+    consultantApprovals.consultants, consultantApprovals.interns,
+  ];
+  if (buckets.some((b) => b && b.failed > 0)) return false;
   return true;
+}
+
+// Renders one approval section: count, records, and any failures.
+function approvalBlock(title, bucket, unavailable, fmt) {
+  if (unavailable) return `${title}\n  ${unavailable}`;
+  const approved = bucket?.approved ?? null;
+  const records  = bucket?.records ?? [];
+  const failures = bucket?.failedRecords ?? [];
+  const failed   = bucket?.failed ?? 0;
+  const lines = [title, `  Approved : ${approved ?? "not run"}`];
+  if (records.length) records.forEach((r) => lines.push(`  - ${fmt ? fmt(r) : r}`));
+  else lines.push("  - none");
+  if (failed > 0) {
+    lines.push(`  Failed   : ${failed}`);
+    (failures.length ? failures : ["(see run log)"]).forEach((r) => lines.push(`  ! ${r}`));
+  }
+  return lines.join("\n");
 }
 
 function buildSubject(allGood) {
@@ -79,11 +101,7 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   } else {
     const regularizedDates = summary.succeeded || [];
     const pendingDates     = summary.failed || [];
-    const scanned          = summary.scanned || [];
     const months           = summary.monthContexts || [];
-    const skipped          = scanned.filter(
-      (r) => r.decision && r.decision !== "REGULARIZE" && !/today or future/.test(r.decision)
-    );
 
     const lines = [`ATTENDANCE`];
     if (months.length) lines.push(`  Checked     : ${months.join(" + ")} month`);
@@ -91,94 +109,26 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
     regularizedDates.forEach((d) => lines.push(`      - ${d}`));
     lines.push(`  Pending     : ${pendingDates.length}`);
     pendingDates.forEach((d) => lines.push(`      - ${d}`));
-    lines.push(`  Not actioned: ${skipped.length}`);
-    skipped.forEach((r) => lines.push(`      - ${r.date} | ${r.status} | ${r.decision.replace(/^skip: /, "")}`));
     attendanceBlock = lines.join("\n");
   }
 
-  // ── Leave ──
-  let leaveBlock;
-  if (loginError || !taskApprovals) {
-    leaveBlock = `LEAVE APPROVALS\n  - did not run`;
-  } else if (taskApprovals.error) {
-    leaveBlock = `LEAVE APPROVALS\n  ❌ Error: ${taskApprovals.error}`;
-  } else {
-    const leaveApproved = taskApprovals?.leave?.approved ?? null;
-    const leaveRecords  = taskApprovals?.leave?.records ?? [];
-    leaveBlock = [
-      `LEAVE APPROVALS`,
-      `  Approved : ${leaveApproved ?? "not run"}`,
-      ...(leaveRecords.length ? leaveRecords.map((r) => `  - ${r}`) : ["  - none"]),
-    ].join("\n");
-  }
+  // ── Approval sections ──
+  const taskGone = loginError ? "- did not run (login failed)"
+                 : !taskApprovals ? "- did not run"
+                 : taskApprovals.error ? `❌ Error: ${taskApprovals.error}` : null;
 
-  // ── Time Correction ──
-  let tcBlock;
-  if (loginError || !taskApprovals) {
-    tcBlock = `TIME CORRECTIONS\n  - did not run`;
-  } else if (taskApprovals.error) {
-    tcBlock = `TIME CORRECTIONS\n  ❌ Error: ${taskApprovals.error}`;
-  } else {
-    const tcApproved = taskApprovals?.timeCorrection?.approved ?? null;
-    const tcRecords  = taskApprovals?.timeCorrection?.records ?? [];
-    tcBlock = [
-      `TIME CORRECTIONS`,
-      `  Approved : ${tcApproved ?? "not run"}`,
-      ...(tcRecords.length ? tcRecords.map((r) => `  - ${r}`) : ["  - none"]),
-    ].join("\n");
-  }
+  const payGone = loginError ? "- did not run (login failed)"
+                : !consultantApprovals ? "- did not run"
+                : consultantApprovals.error ? `❌ Error: ${consultantApprovals.error}` : null;
 
-  // ── Optional Holiday ──
-  let ohBlock;
-  if (loginError || !taskApprovals) {
-    ohBlock = `OPTIONAL HOLIDAY REQUESTS\n  - did not run`;
-  } else if (taskApprovals.error) {
-    ohBlock = `OPTIONAL HOLIDAY REQUESTS\n  ❌ Error: ${taskApprovals.error}`;
-  } else {
-    const ohApproved = taskApprovals?.optionalHoliday?.approved ?? null;
-    const ohRecords  = taskApprovals?.optionalHoliday?.records ?? [];
-    ohBlock = [
-      `OPTIONAL HOLIDAY REQUESTS`,
-      `  Approved : ${ohApproved ?? "not run"}`,
-      ...(ohRecords.length ? ohRecords.map((r) => `  - ${r}`) : ["  - none"]),
-    ].join("\n");
-  }
+  const payFmt = (r) =>
+    `${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`;
 
-  // ── Consultants ──
-  let consultantBlock;
-  if (loginError || !consultantApprovals) {
-    consultantBlock = `CONSULTANT PAYMENTS\n  - did not run`;
-  } else if (consultantApprovals.error) {
-    consultantBlock = `CONSULTANT PAYMENTS\n  ❌ Error: ${consultantApprovals.error}`;
-  } else {
-    const cApproved = consultantApprovals?.consultants?.approved ?? null;
-    const cRecords  = consultantApprovals?.consultants?.records ?? [];
-    consultantBlock = [
-      `CONSULTANT PAYMENTS`,
-      `  Approved : ${cApproved ?? "not run"}`,
-      ...(cRecords.length
-        ? cRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
-        : ["  - none"]),
-    ].join("\n");
-  }
-
-  // ── Interns ──
-  let internBlock;
-  if (loginError || !consultantApprovals) {
-    internBlock = `INTERN PAYMENTS\n  - did not run`;
-  } else if (consultantApprovals.error) {
-    internBlock = `INTERN PAYMENTS\n  ❌ Error: ${consultantApprovals.error}`;
-  } else {
-    const iApproved = consultantApprovals?.interns?.approved ?? null;
-    const iRecords  = consultantApprovals?.interns?.records ?? [];
-    internBlock = [
-      `INTERN PAYMENTS`,
-      `  Approved : ${iApproved ?? "not run"}`,
-      ...(iRecords.length
-        ? iRecords.map((r) => `  - ${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`)
-        : ["  - none"]),
-    ].join("\n");
-  }
+  const leaveBlock      = approvalBlock("LEAVE APPROVALS", taskApprovals?.leave, taskGone);
+  const tcBlock         = approvalBlock("TIME CORRECTIONS", taskApprovals?.timeCorrection, taskGone);
+  const ohBlock         = approvalBlock("OPTIONAL HOLIDAY REQUESTS", taskApprovals?.optionalHoliday, taskGone);
+  const consultantBlock = approvalBlock("CONSULTANT PAYMENTS", consultantApprovals?.consultants, payGone, payFmt);
+  const internBlock     = approvalBlock("INTERN PAYMENTS", consultantApprovals?.interns, payGone, payFmt);
 
   const text = [
     `DARWINBOX AUTOMATION · ${date}`,
