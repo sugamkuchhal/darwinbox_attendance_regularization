@@ -27,12 +27,28 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: 'npm'
 
       - name: 📦 Install dependencies
         run: npm install
 
+      - name: 🎭 Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+
+      # On a cache miss, download the browser and install system deps.
       - name: 🎭 Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install chromium --with-deps
+
+      # On a cache hit the browser is restored, but apt packages are not
+      # cacheable — they must be reinstalled every run.
+      - name: 🎭 Install Playwright system deps (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: 🤖 Run automation
         env:
