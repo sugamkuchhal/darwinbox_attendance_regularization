@@ -25,11 +25,24 @@ function line(char = "═", len = 40) {
   return char.repeat(len);
 }
 
+// Playwright errors carry a multi-line "logs" block and full URLs. URLs get
+// rewritten by Outlook SafeLinks (which also leaks the recipient address into
+// the body), so keep the first line only and strip links.
+function cleanErr(msg) {
+  if (!msg) return "unknown error";
+  return String(msg)
+    .split("\n")[0]
+    .replace(/https?:\/\/\S+/g, "<link>")
+    .trim()
+    .slice(0, 180);
+}
+
 function isAllGood({ loginError, summary, taskApprovals, consultantApprovals }) {
   if (loginError) return false;
   if (!summary || summary.error || (summary.failed && summary.failed.length > 0)) return false;
   if (!taskApprovals || taskApprovals.error) return false;
   if (!consultantApprovals || consultantApprovals.error) return false;
+  if (consultantApprovals.loginOk === false) return false;
   const buckets = [
     taskApprovals.leave, taskApprovals.timeCorrection, taskApprovals.optionalHoliday,
     consultantApprovals.consultants, consultantApprovals.interns,
@@ -50,7 +63,7 @@ function approvalBlock(title, bucket, unavailable, fmt) {
   else lines.push("  - none");
   if (failed > 0) {
     lines.push(`  Failed   : ${failed}`);
-    (failures.length ? failures : ["(see run log)"]).forEach((r) => lines.push(`  ! ${r}`));
+    (failures.length ? failures : ["(see run log)"]).forEach((r) => lines.push(`  ! ${cleanErr(r)}`));
   }
   return lines.join("\n");
 }
@@ -85,10 +98,23 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   const allGood = isAllGood({ loginError, summary, taskApprovals, consultantApprovals });
   const subject = buildSubject(allGood);
 
-  // ── Login ──
-  const loginBlock = loginError
-    ? `LOGIN\n  ❌ Failed: ${loginError}`
-    : `LOGIN\n  ✅ Success`;
+  // ── Login (two systems: Darwinbox via Microsoft SSO, OneArvind via ADFS) ──
+  const loginLines = ["LOGIN"];
+  loginLines.push(
+    loginError
+      ? `  ❌ Darwinbox (Microsoft SSO) : ${cleanErr(loginError)}`
+      : `  ✅ Darwinbox (Microsoft SSO)`
+  );
+  if (loginError || !consultantApprovals) {
+    loginLines.push(`  -  OneArvind (ADFS)        : did not run`);
+  } else if (consultantApprovals.loginOk) {
+    loginLines.push(`  ✅ OneArvind (ADFS)`);
+  } else {
+    loginLines.push(
+      `  ❌ OneArvind (ADFS)        : ${cleanErr(consultantApprovals.loginError || consultantApprovals.error)}`
+    );
+  }
+  const loginBlock = loginLines.join("\n");
 
   // ── Attendance ──
   let attendanceBlock;
@@ -97,7 +123,7 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   } else if (!summary) {
     attendanceBlock = `ATTENDANCE\n  - did not run`;
   } else if (summary.error) {
-    attendanceBlock = `ATTENDANCE\n  ❌ Error: ${summary.error}`;
+    attendanceBlock = `ATTENDANCE\n  ❌ Error: ${cleanErr(summary.error)}`;
   } else {
     const regularizedDates = summary.succeeded || [];
     const pendingDates     = summary.failed || [];
@@ -115,11 +141,11 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   // ── Approval sections ──
   const taskGone = loginError ? "- did not run (login failed)"
                  : !taskApprovals ? "- did not run"
-                 : taskApprovals.error ? `❌ Error: ${taskApprovals.error}` : null;
+                 : taskApprovals.error ? `❌ Error: ${cleanErr(taskApprovals.error)}` : null;
 
   const payGone = loginError ? "- did not run (login failed)"
                 : !consultantApprovals ? "- did not run"
-                : consultantApprovals.error ? `❌ Error: ${consultantApprovals.error}` : null;
+                : consultantApprovals.error ? `❌ Error: ${cleanErr(consultantApprovals.error)}` : null;
 
   const payFmt = (r) =>
     `${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`;

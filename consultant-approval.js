@@ -114,12 +114,15 @@ async function approveIntern(page, intern) {
 
 async function approveAllConsultants(page) {
   const result = {
+    loginOk: false,
+    loginError: null,
     consultants: { approved: 0, failed: 0, records: [], failedRecords: [] },
     interns:     { approved: 0, failed: 0, records: [], failedRecords: [] },
   };
 
   if (!USERNAME || !PASSWORD) {
     console.error("❌ DARWINBOX_USERNAME / DARWINBOX_PASSWORD not set — skipping");
+    result.loginError = "credentials not set";
     return result;
   }
 
@@ -136,11 +139,19 @@ async function approveAllConsultants(page) {
       await cPage.fill("#userNameInput", USERNAME);
       await cPage.fill("#passwordInput", PASSWORD);
       await cPage.click("#submitButton");
-      await cPage.waitForURL("**/onearvind.com/**", { timeout: 30000 });
+      // Default waitUntil is "load", which never fires on this page — the ADFS
+      // redirect completes at domcontentloaded. Waiting for "load" timed out
+      // even though navigation had already succeeded.
+      await cPage.waitForURL("**/onearvind.com/**", {
+        timeout: 30000,
+        waitUntil: "domcontentloaded",
+      });
     }
 
     await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
     await loadDashboard(cPage);
+    result.loginOk = true;
+    console.log("   ✅ Logged in to OneArvind (ADFS)");
 
     let pendingConsultants = [];
     let pendingInterns = [];
@@ -188,6 +199,7 @@ async function approveAllConsultants(page) {
   } catch (err) {
     console.error(`   ❌ Could not complete approvals: ${err.message}`);
     result.error = err.message;
+    if (!result.loginOk) result.loginError = err.message;
   } finally {
     await context.close();
   }
