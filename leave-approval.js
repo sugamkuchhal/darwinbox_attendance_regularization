@@ -58,10 +58,12 @@ function formatRow(info) {
     }
     return null;
   };
+  // Keep only the date from "Applied For" — drop the time range.
+  const appliedFor = (pick("applied for") || "").split(/\s+\d{2}:\d{2}/)[0].trim();
   const parts = [
     pick("employee name", "requested for"),
     pick("type", "flow name"),
-    pick("applied for"),
+    appliedFor || null,
   ].filter(Boolean);
   if (parts.length) return parts.join(" | ");
   return (info.cells || []).slice(0, 2).join(" | ") || null;
