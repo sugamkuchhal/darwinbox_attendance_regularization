@@ -11,7 +11,10 @@ const NAV_TIMEOUT     = 60000;
 const DETAIL_TIMEOUT  = 20000;
 
 async function loadDashboard(page) {
-  await page.goto(DASHBOARD_URL, { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
+  // "networkidle" needs 500ms of zero network activity. This dashboard keeps
+  // connections open, so it never settles and burns the full 60s timeout even
+  // though the page rendered. #dvManagerPending is the real readiness signal.
+  await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
   await page.waitForSelector("#dvManagerPending", { timeout: 30000 });
 }
 
@@ -133,22 +136,40 @@ async function approveAllConsultants(page) {
   try {
     console.log("   🔐 Logging in via ADFS...");
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
+    console.log(`   \u21b3 landed on: ${new URL(cPage.url()).hostname}`);
 
     if (cPage.url().includes("adfs.arvind.in")) {
-      await cPage.waitForSelector("#userNameInput", { timeout: 10000 });
+      await cPage.waitForSelector("#userNameInput", { timeout: 15000 });
       await cPage.fill("#userNameInput", USERNAME);
       await cPage.fill("#passwordInput", PASSWORD);
       await cPage.click("#submitButton");
-      // Default waitUntil is "load", which never fires on this page — the ADFS
-      // redirect completes at domcontentloaded. Waiting for "load" timed out
-      // even though navigation had already succeeded.
-      await cPage.waitForURL("**/onearvind.com/**", {
-        timeout: 30000,
-        waitUntil: "domcontentloaded",
-      });
+
+      // ADFS calls back to www.onearvind.com/adfscallback/, which the old glob
+      // "**/onearvind.com/**" does NOT match — that pattern needs a literal "/"
+      // before the host, but with "www." the preceding character is ".".
+      // A predicate accepts both the www and bare host.
+      // Also wait on domcontentloaded: this page never fires "load".
+      await cPage
+        .waitForURL(
+          (u) => /onearvind\.com/i.test(String(u)) && !/adfs\.arvind\.in/i.test(String(u)),
+          { timeout: 30000, waitUntil: "domcontentloaded" }
+        )
+        .catch(() => {});
+
+      if (cPage.url().includes("adfs.arvind.in")) {
+        // ADFS puts the real reason here — wrong password, locked account, etc.
+        const msg = await cPage
+          .$eval("#errorText", (el) => (el.textContent || "").trim())
+          .catch(() => "");
+        throw new Error(msg || "ADFS sign-in did not complete");
+      }
+      console.log("   \u21b3 ADFS sign-in accepted");
+    } else {
+      console.log("   \u21b3 no ADFS prompt — already authenticated or different IdP");
     }
 
-    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "networkidle", timeout: NAV_TIMEOUT });
+    // Same reason as loadDashboard: never use networkidle on this site.
+    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
     await loadDashboard(cPage);
     result.loginOk = true;
     console.log("   ✅ Logged in to OneArvind (ADFS)");

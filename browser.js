@@ -214,7 +214,7 @@ async function submitTotp(page) {
       console.log("🔄 Retrying with next TOTP window (waiting 30s)...");
       await sleep(30000);
     }
-    const box = await page.$(OTC_SEL);
+    const box = await page.$(OTC_SEL).catch(() => null);
     if (!box) return false;
     await box.fill("").catch(() => {});
     await box.type(code, { delay: 40 }).catch(() => {});
@@ -226,7 +226,7 @@ async function submitTotp(page) {
     if (!clicked) await page.keyboard.press("Enter").catch(() => {});
     await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
     await sleep(2500);
-    const stillOtc = await page.$(OTC_SEL);
+    const stillOtc = await page.$(OTC_SEL).catch(() => null);
     if (!stillOtc) {
       console.log("✅ TOTP accepted");
       return true;
