@@ -10,6 +10,28 @@ const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
 const NAV_TIMEOUT     = 60000;
 const DETAIL_TIMEOUT  = 20000;
 
+// onearvind is an internal site reached from a GitHub runner; it is slow or
+// congested at some hours. A single 60s attempt was failing the whole payments
+// step, so retry the sign-in sequence before giving up.
+async function withRetry(label, fn, attempts = 3) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const brief = String(err.message || err).split("\n")[0];
+      console.warn(`   \u26a0\ufe0f ${label} — attempt ${i}/${attempts} failed: ${brief}`);
+      if (i < attempts) {
+        console.log(`   \u21bb retrying in ${5 * i}s...`);
+        await new Promise((r) => setTimeout(r, 5000 * i));
+      }
+    }
+  }
+  const brief = String(lastErr?.message || lastErr).split("\n")[0];
+  throw new Error(`${label} failed after ${attempts} attempts — ${brief}`);
+}
+
 async function loadDashboard(page) {
   // "networkidle" needs 500ms of zero network activity. This dashboard keeps
   // connections open, so it never settles and burns the full 60s timeout even
@@ -135,7 +157,8 @@ async function approveAllConsultants(page) {
 
   try {
     console.log("   🔐 Logging in via ADFS...");
-    await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded" });
+    await withRetry("OneArvind sign-in", async () => {
+    await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
     console.log(`   \u21b3 landed on: ${new URL(cPage.url()).hostname}`);
 
     if (cPage.url().includes("adfs.arvind.in")) {
@@ -169,8 +192,11 @@ async function approveAllConsultants(page) {
     }
 
     // Same reason as loadDashboard: never use networkidle on this site.
+    console.log("   \u21b3 opening consultantmgmt...");
     await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    console.log("   \u21b3 loading manager dashboard...");
     await loadDashboard(cPage);
+    });
     result.loginOk = true;
     console.log("   ✅ Logged in to OneArvind (ADFS)");
 
