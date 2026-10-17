@@ -4,6 +4,7 @@
 // Detail pages must be reached by clicking from dashboard (direct goto → /Home/UnAuthorized)
 
 const { USERNAME, PASSWORD } = require("./config");
+const { newHardenedContext, enterCredentials, resolveAuth } = require("./browser");
 
 const CONSULTANT_BASE = "https://consultantmgmt.onearvind.com";
 const DASHBOARD_URL   = `${CONSULTANT_BASE}/Approver/ManagerDashboard`;
@@ -37,6 +38,15 @@ async function loadDashboard(page) {
   // connections open, so it never settles and burns the full 60s timeout even
   // though the page rendered. #dvManagerPending is the real readiness signal.
   await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+  // Hitting this route before the app's session is initialised makes the
+  // server throw a NullReferenceException and return a bare error page.
+  // Detect it directly instead of waiting 30s for a selector that can't appear.
+  const body = await page
+    .evaluate(() => (document.body ? document.body.innerText : "").slice(0, 200))
+    .catch(() => "");
+  if (/Object reference not set/i.test(body)) {
+    throw new Error("ManagerDashboard returned a server error (session not established)");
+  }
   await page.waitForSelector("#dvManagerPending", { timeout: 30000 });
 }
 
@@ -152,7 +162,7 @@ async function approveAllConsultants(page) {
   }
 
   const browser = page.context().browser();
-  const context = await browser.newContext();
+  const context = await newHardenedContext(browser);
   const cPage = await context.newPage();
 
   try {
@@ -161,7 +171,16 @@ async function approveAllConsultants(page) {
     await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
     console.log(`   \u21b3 landed on: ${new URL(cPage.url()).hostname}`);
 
-    if (cPage.url().includes("adfs.arvind.in")) {
+    // OneArvind has moved off on-prem ADFS onto Microsoft sign-in. The old code
+    // only logged in when the URL contained "adfs.arvind.in", so on
+    // login.microsoftonline.com it silently skipped authentication entirely and
+    // then failed later on the dashboard. Handle both identity providers.
+    if (/login\.microsoft(online)?\.com/i.test(cPage.url())) {
+      console.log("   \u21b3 Microsoft sign-in detected — running SSO flow");
+      await enterCredentials(cPage);
+      await resolveAuth(cPage, { targetHost: "onearvind.com" });
+      console.log("   \u21b3 Microsoft sign-in accepted");
+    } else if (cPage.url().includes("adfs.arvind.in")) {
       await cPage.waitForSelector("#userNameInput", { timeout: 15000 });
       await cPage.fill("#userNameInput", USERNAME);
       await cPage.fill("#passwordInput", PASSWORD);
@@ -188,14 +207,31 @@ async function approveAllConsultants(page) {
       }
       console.log("   \u21b3 ADFS sign-in accepted");
     } else {
-      console.log("   \u21b3 no ADFS prompt — already authenticated or different IdP");
+      console.log(`   \u21b3 no sign-in prompt — already on ${new URL(cPage.url()).hostname}`);
     }
 
-    // Same reason as loadDashboard: never use networkidle on this site.
+    // consultantmgmt is a separate host from onearvind.com and runs its own
+    // ADFS round-trip. domcontentloaded can return mid-redirect, so settle on
+    // the final URL before doing anything else.
     console.log("   \u21b3 opening consultantmgmt...");
     await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
-    console.log("   \u21b3 loading manager dashboard...");
-    await loadDashboard(cPage);
+    await cPage
+      .waitForURL((u) => String(u).includes("consultantmgmt.onearvind.com"), {
+        timeout: 30000,
+        waitUntil: "domcontentloaded",
+      })
+      .catch(() => {});
+
+    // Visiting the root is what initialises the app session. If even this is
+    // an error page, the session is not up — fail now so the retry can re-run
+    // the whole sequence rather than crashing later on the dashboard.
+    const landing = await cPage
+      .evaluate(() => (document.body ? document.body.innerText : "").slice(0, 200))
+      .catch(() => "");
+    if (/Object reference not set/i.test(landing)) {
+      throw new Error("consultantmgmt session not ready (server error on landing page)");
+    }
+    console.log(`   \u21b3 consultantmgmt ready (${new URL(cPage.url()).pathname})`);
     });
     result.loginOk = true;
     console.log("   ✅ Logged in to OneArvind (ADFS)");

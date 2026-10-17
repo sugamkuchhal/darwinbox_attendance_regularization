@@ -37,6 +37,16 @@ const KILL_WEBAUTHN = () => {
   } catch (_) {}
 };
 
+// Any context that may hit a Microsoft sign-in needs the passkey block,
+// otherwise it hangs on the FIDO prompt exactly as the main login used to.
+async function newHardenedContext(browser) {
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+  });
+  await context.addInitScript(KILL_WEBAUTHN);
+  return context;
+}
+
 async function launchBrowser() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -240,14 +250,15 @@ async function submitTotp(page) {
 // Microsoft's new sign-in can present these pages in any order and any
 // combination. Rather than assume one sequence, look at what's on screen each
 // round and act, until Darwinbox is reached.
-async function resolveAuth(page) {
-  const host = new URL(DARWINBOX_URL).hostname;
+async function resolveAuth(page, opts = {}) {
+  const host = opts.targetHost || new URL(DARWINBOX_URL).hostname;
   const deadline = Date.now() + 4 * 60 * 1000;
   let round = 0;
   let lastSignature = "";
   let stuckRounds = 0;
   let totpTried = 0;
   let pickerAttempted = false;
+  let pwdTried = 0;
 
   while (Date.now() < deadline) {
     round++;
@@ -286,10 +297,28 @@ async function resolveAuth(page) {
       continue;
     }
 
-    // 2. Passkey / security key screen — leave it
+    // 2. Password entry. This can appear mid-flow, not just at the start —
+    // choosing "Use my password" on the passkey screen lands back here.
+    if (state.pwd) {
+      if (pwdTried >= 2) throw new Error("Password was not accepted");
+      pwdTried++;
+      console.log("🔑 Password field present — filling");
+      await page
+        .fill('input[type="password"], input[name="passwd"], #i0118', PASSWORD)
+        .catch(() => {});
+      await sleep(400);
+      (await clickById(page, "idSIButton9")) ||
+        (await clickByText(page, "^sign in$|^next$|^submit$|^continue$"));
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+      await sleep(2000);
+      continue;
+    }
+
+    // 3. Passkey / security key screen — leave it
     if (url.includes("bridge/fido") || /face, fingerprint|security key|passkey/i.test(state.title + " " + state.text)) {
       console.log("🔑 Passkey screen — switching to another method");
       const left =
+        (await clickByText(page, "use my password|use your password")) ||
         (await clickByText(page, "other ways to sign in|different method|another way|use a code|can't use")) ||
         (await clickById(page, "idA_PWD_SwitchToCredPicker")) ||
         (await clickById(page, "idBtn_Back"));
@@ -302,7 +331,7 @@ async function resolveAuth(page) {
       continue;
     }
 
-    // 3. Method picker — choose the authenticator-app code option.
+    // 4. Method picker — choose the authenticator-app code option.
     // Only attempt once; if no candidate advances the page, stop rather than spin.
     if (/verify your identity|verification code|how would you like|choose a way|sign-?in options/i.test(
         state.text + " " + state.title)) {
@@ -331,7 +360,7 @@ async function resolveAuth(page) {
       continue;
     }
 
-    // 4. Stay signed in / consent
+    // 5. Stay signed in / consent
     if (/stay signed in|keep me signed in|reduce the number of times/i.test(state.text)) {
       console.log("💾 'Stay signed in' — confirming");
       (await clickById(page, "idSIButton9")) || (await clickByText(page, "^yes$|stay signed in"));
@@ -340,7 +369,7 @@ async function resolveAuth(page) {
       continue;
     }
 
-    // 5. Generic continue on an interstitial
+    // 6. Generic continue on an interstitial
     if (stuckRounds >= 1) {
       const advanced =
         (await clickById(page, "idSIButton9")) ||
@@ -352,7 +381,7 @@ async function resolveAuth(page) {
       }
     }
 
-    // 6. Nothing recognised
+    // 7. Nothing recognised
     if (stuckRounds >= 3) {
       await dumpPage(page, "unrecognised");
       throw new Error(`Stuck on unrecognised page: ${redactUrl(url)} — "${state.title}"`);
@@ -384,4 +413,4 @@ async function login(page) {
   await verifyLogin(page);
 }
 
-module.exports = { launchBrowser, login };
+module.exports = { launchBrowser, login, newHardenedContext, enterCredentials, resolveAuth };
