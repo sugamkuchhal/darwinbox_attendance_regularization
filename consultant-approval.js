@@ -14,7 +14,18 @@ const DETAIL_TIMEOUT  = 20000;
 // onearvind is an internal site reached from a GitHub runner; it is slow or
 // congested at some hours. A single 60s attempt was failing the whole payments
 // step, so retry the sign-in sequence before giving up.
-async function withRetry(label, fn, attempts = 3) {
+// Navigate with a labelled error, so a timeout says which URL died.
+async function go(page, url, label) {
+  const t0 = Date.now();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+  } catch (err) {
+    throw new Error(`${label} unreachable after ${Math.round((Date.now() - t0) / 1000)}s`);
+  }
+  console.log(`   \u21b3 ${label} ok (${Math.round((Date.now() - t0) / 1000)}s)`);
+}
+
+async function withRetry(label, fn, attempts = 5) {
   let lastErr;
   for (let i = 1; i <= attempts; i++) {
     try {
@@ -24,8 +35,8 @@ async function withRetry(label, fn, attempts = 3) {
       const brief = String(err.message || err).split("\n")[0];
       console.warn(`   \u26a0\ufe0f ${label} — attempt ${i}/${attempts} failed: ${brief}`);
       if (i < attempts) {
-        console.log(`   \u21bb retrying in ${5 * i}s...`);
-        await new Promise((r) => setTimeout(r, 5000 * i));
+        console.log(`   \u21bb retrying in ${10 * i}s...`);
+        await new Promise((r) => setTimeout(r, 10000 * i));
       }
     }
   }
@@ -37,7 +48,7 @@ async function loadDashboard(page) {
   // "networkidle" needs 500ms of zero network activity. This dashboard keeps
   // connections open, so it never settles and burns the full 60s timeout even
   // though the page rendered. #dvManagerPending is the real readiness signal.
-  await page.goto(DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+  await go(page, DASHBOARD_URL, "manager dashboard");
   // Hitting this route before the app's session is initialised makes the
   // server throw a NullReferenceException and return a bare error page.
   // Detect it directly instead of waiting 30s for a selector that can't appear.
@@ -163,12 +174,12 @@ async function approveAllConsultants(page) {
 
   const browser = page.context().browser();
   const context = await newHardenedContext(browser);
-  const cPage = await context.newPage();
+  let cPage = await context.newPage();
 
   try {
     console.log("   🔐 Logging in via ADFS...");
     await withRetry("OneArvind sign-in", async () => {
-    await cPage.goto("https://onearvind.com", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    await go(cPage, "https://onearvind.com", "onearvind.com");
     console.log(`   \u21b3 landed on: ${new URL(cPage.url()).hostname}`);
 
     // OneArvind has moved off on-prem ADFS onto Microsoft sign-in. The old code
@@ -214,7 +225,32 @@ async function approveAllConsultants(page) {
     // ADFS round-trip. domcontentloaded can return mid-redirect, so settle on
     // the final URL before doing anything else.
     console.log("   \u21b3 opening consultantmgmt...");
-    await cPage.goto(CONSULTANT_BASE + "/", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    // Reach consultantmgmt the way a person does: click the portal's own
+    // "Consultant Management" link rather than navigating straight to the URL.
+    // The href is identical, but this carries a Referer from onearvind.com and
+    // opens in a new tab (target="_blank"), exactly as the manual flow does.
+    const portalLink = await cPage
+      .$('a[href*="consultantmgmt.onearvind.com"]')
+      .catch(() => null);
+
+    if (portalLink) {
+      console.log("   \u21b3 clicking portal link: Consultant Management");
+      const [popup] = await Promise.all([
+        context.waitForEvent("page", { timeout: 30000 }).catch(() => null),
+        portalLink.click().catch(() => {}),
+      ]);
+      if (popup) {
+        await popup.waitForLoadState("domcontentloaded", { timeout: NAV_TIMEOUT }).catch(() => {});
+        cPage = popup; // everything downstream runs in the opened tab
+        console.log(`   \u21b3 consultantmgmt opened in new tab (${new URL(cPage.url()).pathname})`);
+      } else {
+        console.warn("   \u26a0\ufe0f link click opened no tab — navigating directly");
+        await go(cPage, CONSULTANT_BASE + "/", "consultantmgmt");
+      }
+    } else {
+      console.warn("   \u26a0\ufe0f portal link not found — navigating directly");
+      await go(cPage, CONSULTANT_BASE + "/", "consultantmgmt");
+    }
     await cPage
       .waitForURL((u) => String(u).includes("consultantmgmt.onearvind.com"), {
         timeout: 30000,
