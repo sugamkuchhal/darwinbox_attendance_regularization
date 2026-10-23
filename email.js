@@ -98,23 +98,21 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   const allGood = isAllGood({ loginError, summary, taskApprovals, consultantApprovals });
   const subject = buildSubject(allGood);
 
-  // ── Login (two systems: Darwinbox via Microsoft SSO, OneArvind via ADFS) ──
-  const loginLines = ["LOGIN"];
-  loginLines.push(
-    loginError
-      ? `  ❌ Darwinbox (Microsoft SSO) : ${cleanErr(loginError)}`
-      : `  ✅ Darwinbox (Microsoft SSO)`
-  );
+  // ── Per-system sign-in status (each system logs in separately) ──
+  const dbxLogin = loginError
+    ? `  \u274c Sign-in failed: ${cleanErr(loginError)}`
+    : `  \u2705 Signed in (Microsoft SSO)`;
+
+  let oaLogin;
   if (loginError || !consultantApprovals) {
-    loginLines.push(`  -  OneArvind (ADFS)        : did not run`);
+    oaLogin = `  -  did not run`;
   } else if (consultantApprovals.loginOk) {
-    loginLines.push(`  ✅ OneArvind (ADFS)`);
+    oaLogin = `  \u2705 Signed in`;
   } else {
-    loginLines.push(
-      `  ❌ OneArvind (ADFS)        : ${cleanErr(consultantApprovals.loginError || consultantApprovals.error)}`
-    );
+    oaLogin = `  \u274c Sign-in failed: ${cleanErr(
+      consultantApprovals.loginError || consultantApprovals.error
+    )}`;
   }
-  const loginBlock = loginLines.join("\n");
 
   // ── Attendance ──
   let attendanceBlock;
@@ -157,10 +155,11 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
   const internBlock     = approvalBlock("INTERN PAYMENTS", consultantApprovals?.interns, payGone, payFmt);
 
   const text = [
-    `DARWINBOX AUTOMATION · ${date}`,
+    `DARWINBOX AUTOMATION \u00b7 ${date}`,
     line(),
     ``,
-    loginBlock,
+    `\u2501\u2501 DARWINBOX \u2501\u2501`,
+    dbxLogin,
     ``,
     attendanceBlock,
     ``,
@@ -169,6 +168,9 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
     tcBlock,
     ``,
     ohBlock,
+    ``,
+    `\u2501\u2501 ONEARVIND \u2501\u2501`,
+    oaLogin,
     ``,
     consultantBlock,
     ``,
