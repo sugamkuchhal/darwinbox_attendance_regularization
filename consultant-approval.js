@@ -235,9 +235,22 @@ async function approveAllConsultants(page) {
 
     if (portalLink) {
       console.log("   \u21b3 clicking portal link: Consultant Management");
+      // The link sits in a collapsed menu (Services > HR Services), so a real
+      // click is refused for being invisible. Dispatch the click in-page
+      // instead — it fires the same navigation regardless of visibility.
       const [popup] = await Promise.all([
         context.waitForEvent("page", { timeout: 30000 }).catch(() => null),
-        portalLink.click().catch(() => {}),
+        cPage
+          .evaluate(() => {
+            const a = document.querySelector('a[href*="consultantmgmt.onearvind.com"]');
+            if (!a) return false;
+            a.click();
+            return true;
+          })
+          .catch((e) => {
+            console.warn(`   \u26a0\ufe0f in-page click failed: ${e.message}`);
+            return false;
+          }),
       ]);
       if (popup) {
         await popup.waitForLoadState("domcontentloaded", { timeout: NAV_TIMEOUT }).catch(() => {});
