@@ -1,4 +1,9 @@
-// Sends end-of-run summary email when SMTP config is available.
+// Builds and sends run summary emails.
+//
+// Two independent senders, because the two workflows run on different
+// schedules and have different notification rules:
+//   sendAttendanceEmail — Darwinbox: attendance + leave/TC/optional holiday
+//   sendPaymentsEmail   — OneArvind: consultant + intern payments
 const nodemailer = require("nodemailer");
 
 function isEmail(v) {
@@ -25,6 +30,10 @@ function line(char = "═", len = 40) {
   return char.repeat(len);
 }
 
+function today() {
+  return new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 // Playwright errors carry a multi-line "logs" block and full URLs. URLs get
 // rewritten by Outlook SafeLinks (which also leaks the recipient address into
 // the body), so keep the first line only and strip links.
@@ -35,20 +44,6 @@ function cleanErr(msg) {
     .replace(/https?:\/\/\S+/g, "<link>")
     .trim()
     .slice(0, 180);
-}
-
-function isAllGood({ loginError, summary, taskApprovals, consultantApprovals }) {
-  if (loginError) return false;
-  if (!summary || summary.error || (summary.failed && summary.failed.length > 0)) return false;
-  if (!taskApprovals || taskApprovals.error) return false;
-  if (!consultantApprovals || consultantApprovals.error) return false;
-  if (consultantApprovals.loginOk === false) return false;
-  const buckets = [
-    taskApprovals.leave, taskApprovals.timeCorrection, taskApprovals.optionalHoliday,
-    consultantApprovals.consultants, consultantApprovals.interns,
-  ];
-  if (buckets.some((b) => b && b.failed > 0)) return false;
-  return true;
 }
 
 // Renders one approval section: count, records, and any failures.
@@ -68,20 +63,15 @@ function approvalBlock(title, bucket, unavailable, fmt) {
   return lines.join("\n");
 }
 
-function buildSubject(allGood) {
-  const date = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  return allGood
-    ? `[ALL GOOD] Darwinbox · ${date}`
-    : `[PENDING] Darwinbox · ${date}`;
-}
+const payFmt = (r) =>
+  `${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`;
 
-async function sendSummaryEmail({ loginError, summary, taskApprovals, consultantApprovals }) {
+async function deliver(subject, text) {
   const recipient = getRecipient();
   if (!recipient) {
     console.log("⚠️ Email skipped: no valid recipient in DARWINBOX_USERNAME/REPORT_EMAIL_TO");
     return;
   }
-
   const host   = process.env.SMTP_HOST;
   const port   = Number(process.env.SMTP_PORT || 587);
   const secure = String(process.env.SMTP_SECURE || "false").toLowerCase() === "true";
@@ -94,100 +84,131 @@ async function sendSummaryEmail({ loginError, summary, taskApprovals, consultant
     return;
   }
 
-  const date    = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-  const allGood = isAllGood({ loginError, summary, taskApprovals, consultantApprovals });
-  const subject = buildSubject(allGood);
-
-  // ── Per-system sign-in status (each system logs in separately) ──
-  const dbxLogin = loginError
-    ? `  \u274c Sign-in failed: ${cleanErr(loginError)}`
-    : `  \u2705 Signed in (Microsoft SSO)`;
-
-  let oaLogin;
-  if (loginError || !consultantApprovals) {
-    oaLogin = `  -  did not run`;
-  } else if (consultantApprovals.loginOk) {
-    oaLogin = `  \u2705 Signed in`;
-  } else {
-    oaLogin = `  \u274c Sign-in failed: ${cleanErr(
-      consultantApprovals.loginError || consultantApprovals.error
-    )}`;
-  }
-
-  // ── Attendance ──
-  let attendanceBlock;
-  if (loginError) {
-    attendanceBlock = `ATTENDANCE\n  - did not run (login failed)`;
-  } else if (!summary) {
-    attendanceBlock = `ATTENDANCE\n  - did not run`;
-  } else if (summary.error) {
-    attendanceBlock = `ATTENDANCE\n  ❌ Error: ${cleanErr(summary.error)}`;
-  } else {
-    const regularizedDates = summary.succeeded || [];
-    const pendingDates     = summary.failed || [];
-    const months           = summary.monthContexts || [];
-
-    const lines = [`ATTENDANCE`];
-    if (months.length) lines.push(`  Checked     : ${months.join(" + ")} month`);
-    lines.push(`  Regularized : ${regularizedDates.length}`);
-    regularizedDates.forEach((d) => lines.push(`      - ${d}`));
-    lines.push(`  Pending     : ${pendingDates.length}`);
-    pendingDates.forEach((d) => lines.push(`      - ${d}`));
-    attendanceBlock = lines.join("\n");
-  }
-
-  // ── Approval sections ──
-  const taskGone = loginError ? "- did not run (login failed)"
-                 : !taskApprovals ? "- did not run"
-                 : taskApprovals.error ? `❌ Error: ${cleanErr(taskApprovals.error)}` : null;
-
-  const payGone = loginError ? "- did not run (login failed)"
-                : !consultantApprovals ? "- did not run"
-                : consultantApprovals.error ? `❌ Error: ${cleanErr(consultantApprovals.error)}` : null;
-
-  const payFmt = (r) =>
-    `${r.name} (${r.empNo}) | ${monthName(r.month)} ${r.year} | ${fmtAmount(r.netAmount)}`;
-
-  const leaveBlock      = approvalBlock("LEAVE APPROVALS", taskApprovals?.leave, taskGone);
-  const tcBlock         = approvalBlock("TIME CORRECTIONS", taskApprovals?.timeCorrection, taskGone);
-  const ohBlock         = approvalBlock("OPTIONAL HOLIDAY REQUESTS", taskApprovals?.optionalHoliday, taskGone);
-  const consultantBlock = approvalBlock("CONSULTANT PAYMENTS", consultantApprovals?.consultants, payGone, payFmt);
-  const internBlock     = approvalBlock("INTERN PAYMENTS", consultantApprovals?.interns, payGone, payFmt);
-
-  const text = [
-    `DARWINBOX AUTOMATION \u00b7 ${date}`,
-    line(),
-    ``,
-    `\u2501\u2501 DARWINBOX \u2501\u2501`,
-    dbxLogin,
-    ``,
-    attendanceBlock,
-    ``,
-    leaveBlock,
-    ``,
-    tcBlock,
-    ``,
-    ohBlock,
-    ``,
-    `\u2501\u2501 ONEARVIND \u2501\u2501`,
-    oaLogin,
-    ``,
-    consultantBlock,
-    ``,
-    internBlock,
-    ``,
-    line(),
-    `Darwinbox Automation`,
-  ].join("\n");
-
   const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
-
   try {
     await transporter.sendMail({ from, to: recipient, subject, text });
-    console.log(`📧 Summary email sent to ${recipient}`);
+    console.log(`📧 Sent: ${subject}`);
   } catch (err) {
     console.log(`⚠️ Email send failed (non-fatal): ${err.message}`);
   }
 }
 
-module.exports = { sendSummaryEmail };
+// ─── Darwinbox: attendance + approvals ────────────────────────────────────────
+// Silent when nothing at all was actioned; otherwise ALL GOOD or PENDING.
+
+async function sendAttendanceEmail({ loginError, summary, taskApprovals }) {
+  const date = today();
+
+  const regularized = summary?.succeeded ?? [];
+  const pending     = summary?.failed ?? [];
+  const buckets     = [taskApprovals?.leave, taskApprovals?.timeCorrection, taskApprovals?.optionalHoliday];
+  const approvedN   = buckets.reduce((n, b) => n + (b?.approved ?? 0), 0);
+  const failedN     = buckets.reduce((n, b) => n + (b?.failed ?? 0), 0);
+
+  const anyFailure =
+    !!loginError || !!summary?.error || pending.length > 0 || !!taskApprovals?.error || failedN > 0;
+  const anyAction = regularized.length > 0 || approvedN > 0;
+
+  // Clean run that did nothing at all — stay quiet.
+  if (!anyFailure && !anyAction) {
+    console.log("📭 Nothing actioned and nothing failed — no email sent");
+    return;
+  }
+
+  const subject = `${anyFailure ? "[PENDING]" : "[ALL GOOD]"} Darwinbox · Attendance & Approvals · ${date}`;
+
+  const loginLine = loginError
+    ? `  ❌ Sign-in failed: ${cleanErr(loginError)}`
+    : `  ✅ Signed in (Microsoft SSO)`;
+
+  let attendanceBlock;
+  if (loginError)            attendanceBlock = `ATTENDANCE\n  - did not run (sign-in failed)`;
+  else if (!summary)         attendanceBlock = `ATTENDANCE\n  - did not run`;
+  else if (summary.error)    attendanceBlock = `ATTENDANCE\n  ❌ Error: ${cleanErr(summary.error)}`;
+  else {
+    const months = summary.monthContexts || [];
+    const l = [`ATTENDANCE`];
+    if (months.length) l.push(`  Checked     : ${months.join(" + ")} month`);
+    l.push(`  Regularized : ${regularized.length}`);
+    regularized.forEach((d) => l.push(`      - ${d}`));
+    l.push(`  Pending     : ${pending.length}`);
+    pending.forEach((d) => l.push(`      - ${d}`));
+    attendanceBlock = l.join("\n");
+  }
+
+  const gone = loginError ? "- did not run (sign-in failed)"
+             : !taskApprovals ? "- did not run"
+             : taskApprovals.error ? `❌ Error: ${cleanErr(taskApprovals.error)}` : null;
+
+  const text = [
+    `DARWINBOX · ATTENDANCE & APPROVALS · ${date}`,
+    line(), ``,
+    loginLine, ``,
+    attendanceBlock, ``,
+    approvalBlock("LEAVE APPROVALS", taskApprovals?.leave, gone), ``,
+    approvalBlock("TIME CORRECTIONS", taskApprovals?.timeCorrection, gone), ``,
+    approvalBlock("OPTIONAL HOLIDAY REQUESTS", taskApprovals?.optionalHoliday, gone), ``,
+    line(),
+    `Darwinbox Automation`,
+  ].join("\n");
+
+  await deliver(subject, text);
+}
+
+// ─── OneArvind: consultant + intern payments ──────────────────────────────────
+// Runs several times a day until one run reaches OneArvind.
+//   reached + approved something        -> ALL GOOD
+//   reached + pending but not approved  -> PENDING
+//   reached + nothing pending           -> silent
+//   never reached, and this is the last slot of the day -> FAILED
+
+async function sendPaymentsEmail({ result, isLastRun }) {
+  const date = today();
+  const reached = !!result?.loginOk;
+
+  if (!reached) {
+    if (!isLastRun) {
+      console.log("📭 OneArvind not reached — will retry at the next slot, no email");
+      return;
+    }
+    const why = cleanErr(result?.loginError || result?.error);
+    await deliver(
+      `[FAILED] OneArvind · Payments · ${date}`,
+      [
+        `ONEARVIND · PAYMENTS · ${date}`,
+        line(), ``,
+        `  ❌ Could not reach OneArvind on any attempt today`,
+        `     Last error: ${why}`, ``,
+        `  Nothing was approved. Any pending payments remain pending.`, ``,
+        line(),
+        `Darwinbox Automation`,
+      ].join("\n")
+    );
+    return;
+  }
+
+  const c = result.consultants ?? {};
+  const i = result.interns ?? {};
+  const approvedN = (c.approved ?? 0) + (i.approved ?? 0);
+  const failedN   = (c.failed ?? 0) + (i.failed ?? 0);
+
+  if (approvedN === 0 && failedN === 0) {
+    console.log("📭 Reached OneArvind, nothing pending — no email sent");
+    return;
+  }
+
+  const subject = `${failedN > 0 ? "[PENDING]" : "[ALL GOOD]"} OneArvind · Payments · ${date}`;
+  const text = [
+    `ONEARVIND · PAYMENTS · ${date}`,
+    line(), ``,
+    `  ✅ Signed in`, ``,
+    approvalBlock("CONSULTANT PAYMENTS", c, null, payFmt), ``,
+    approvalBlock("INTERN PAYMENTS", i, null, payFmt), ``,
+    line(),
+    `Darwinbox Automation`,
+  ].join("\n");
+
+  await deliver(subject, text);
+}
+
+module.exports = { sendAttendanceEmail, sendPaymentsEmail };

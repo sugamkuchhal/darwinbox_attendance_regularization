@@ -1,10 +1,11 @@
-// Bootstraps runtime: validates env, logs in, runs flow, sends summary.
+// Darwinbox run: attendance regularization + leave / time correction /
+// optional holiday approvals. Runs once a day.
+// OneArvind payments live in payments.js on their own schedule.
 const { DARWINBOX_URL, USERNAME, PASSWORD, EMPLOYEE_ID } = require("./config");
 const { launchBrowser, login } = require("./browser");
 const { regularizeAttendance } = require("./attendance-orchestrator");
 const { approveAllLeaveRequests } = require("./leave-approval");
-const { approveAllConsultants } = require("./consultant-approval");
-const { sendSummaryEmail } = require("./email");
+const { sendAttendanceEmail } = require("./email");
 
 function step(n, total, label) {
   console.log(`\n${"═".repeat(40)}`);
@@ -20,14 +21,12 @@ async function run() {
 
   const { browser, page } = await launchBrowser();
 
-  // Step results — null means "did not run"
-  let loginError      = null;
-  let summary         = null;  // attendance
-  let taskApprovals   = null;  // leave + time correction + optional holiday
-  let consultantApprovals = null;
+  let loginError    = null;
+  let summary       = null;
+  let taskApprovals = null;
 
   try {
-    step(1, 5, "Login");
+    step(1, 4, "Login");
     try {
       await login(page);
     } catch (err) {
@@ -37,7 +36,7 @@ async function run() {
     }
 
     if (!loginError) {
-      step(2, 5, "Attendance Regularization");
+      step(2, 4, "Attendance Regularization");
       try {
         summary = await regularizeAttendance(page);
       } catch (err) {
@@ -45,26 +44,17 @@ async function run() {
         summary = { succeeded: [], failed: [], error: err.message };
       }
 
-      step(3, 5, "Leave & Time Correction Approvals");
+      step(3, 4, "Leave & Time Correction Approvals");
       try {
         taskApprovals = await approveAllLeaveRequests(page);
       } catch (err) {
         console.error("❌ Leave/time correction step failed:", err.message);
         taskApprovals = { error: err.message };
       }
-
-      step(4, 5, "Consultant & Intern Approvals");
-      try {
-        consultantApprovals = await approveAllConsultants(page);
-      } catch (err) {
-        console.error("❌ Consultant/intern step failed:", err.message);
-        consultantApprovals = { error: err.message };
-      }
     }
 
-    step(5, 5, "Summary Email");
-    await sendSummaryEmail({ loginError, summary, taskApprovals, consultantApprovals });
-
+    step(4, 4, "Summary Email");
+    await sendAttendanceEmail({ loginError, summary, taskApprovals });
   } finally {
     await browser.close();
   }

@@ -1,0 +1,102 @@
+name: OneArvind Payments
+
+# onearvind.com is only intermittently reachable from GitHub runners, so try
+# several times a day. The first run that gets through writes a dated marker
+# into the Actions cache; later slots restore it and exit in seconds.
+# 03:30/06:30/09:30/12:30/15:30 UTC = 09:00/12:00/15:00/18:00/21:00 IST.
+on:
+  schedule:
+    - cron: "30 3,6,9,12,15 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  payments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: 🕒 Work out the IST date and whether this is the last slot
+        id: when
+        run: |
+          IST_DATE=$(TZ=Asia/Kolkata date +%F)
+          IST_HOUR=$(TZ=Asia/Kolkata date +%H)
+          echo "ist_date=$IST_DATE" >> "$GITHUB_OUTPUT"
+          # 21:00 IST is the final scheduled slot; a manual run is never "last".
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$IST_HOUR" -ge 21 ]; then
+            echo "is_last=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_last=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "IST $IST_DATE $IST_HOUR:00 — last slot: $([ "$IST_HOUR" -ge 21 ] && echo yes || echo no)"
+
+      - name: 📌 Restore today's completion marker
+        uses: actions/cache@v4
+        with:
+          path: .payments-state
+          key: payments-done-${{ steps.when.outputs.ist_date }}
+
+      - name: ⏭️ Skip if already completed today
+        id: guard
+        run: |
+          if [ -f ".payments-state/done-${{ steps.when.outputs.ist_date }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already completed today — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 🟢 Setup Node.js
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        if: steps.guard.outputs.skip != 'true'
+        run: npm install
+
+      - name: 🎭 Cache Playwright browsers
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: 🎭 Install Playwright browsers
+        if: steps.guard.outputs.skip != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium --with-deps
+
+      - name: 🎭 Install Playwright system deps (cache hit)
+        if: steps.guard.outputs.skip != 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: 💳 Run payment approvals
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          IS_LAST_RUN:           ${{ steps.when.outputs.is_last }}
+          DARWINBOX_URL:         ${{ secrets.DARWINBOX_URL }}
+          DARWINBOX_USERNAME:    ${{ secrets.DARWINBOX_USERNAME }}
+          DARWINBOX_PASSWORD:    ${{ secrets.DARWINBOX_PASSWORD }}
+          DARWINBOX_EMPLOYEE_ID: ${{ secrets.DARWINBOX_EMPLOYEE_ID }}
+          DARWINBOX_TOTP_SECRET: ${{ secrets.DARWINBOX_TOTP_SECRET }}
+          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:     ${{ github.repository }}
+          SMTP_HOST:             ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:             ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE:           ${{ secrets.SMTP_SECURE }}
+          SMTP_USER:             ${{ secrets.SMTP_USER }}
+          SMTP_PASS:             ${{ secrets.SMTP_PASS }}
+          SMTP_FROM:             ${{ secrets.SMTP_FROM }}
+          REPORT_EMAIL_TO:       ${{ secrets.REPORT_EMAIL_TO }}
+        run: node payments.js

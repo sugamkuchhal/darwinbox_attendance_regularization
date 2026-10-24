@@ -12,3 +12,6 @@ node_modules/
 # that could accidentally get committed.
 .env
 .env.*
+
+# Payments day-marker, persisted via the Actions cache, never committed
+.payments-state/
