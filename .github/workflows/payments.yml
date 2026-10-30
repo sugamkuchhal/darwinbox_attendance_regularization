@@ -47,7 +47,13 @@ jobs:
       - name: ⏭️ Skip if already completed today
         id: guard
         run: |
-          if [ -f ".payments-state/done-${{ steps.when.outputs.ist_date }}" ]; then
+          # The marker only short-circuits scheduled slots. A manual run always
+          # executes — it is the way to pick up something that arrived after
+          # the day's first successful run.
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Manual run — ignoring today's completion marker."
+          elif [ -f ".payments-state/done-${{ steps.when.outputs.ist_date }}" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Already completed today — skipping."
           else
