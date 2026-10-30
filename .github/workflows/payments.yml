@@ -91,6 +91,7 @@ jobs:
         if: steps.guard.outputs.skip != 'true'
         env:
           IS_LAST_RUN:           ${{ steps.when.outputs.is_last }}
+          FORCE_RUN:             ${{ github.event_name != 'schedule' }}
           DARWINBOX_URL:         ${{ secrets.DARWINBOX_URL }}
           DARWINBOX_USERNAME:    ${{ secrets.DARWINBOX_USERNAME }}
           DARWINBOX_PASSWORD:    ${{ secrets.DARWINBOX_PASSWORD }}

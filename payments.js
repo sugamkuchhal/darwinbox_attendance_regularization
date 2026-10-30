@@ -51,9 +51,15 @@ async function run() {
   console.log(`ONEARVIND · PAYMENTS · ${istDate()}${isLastRun ? " (last slot)" : ""}`);
   console.log(`${"═".repeat(40)}`);
 
-  if (alreadyDoneToday()) {
+  // The workflow lets manual runs through its own guard; honour that here too,
+  // otherwise this second check would still stop them.
+  const forceRun = String(process.env.FORCE_RUN || "").toLowerCase() === "true";
+  if (alreadyDoneToday() && !forceRun) {
     console.log("✅ Already completed earlier today — nothing to do");
     return;
+  }
+  if (forceRun && alreadyDoneToday()) {
+    console.log("▶️  Manual run — ignoring today's completion marker");
   }
 
   const { browser, page } = await launchBrowser();
