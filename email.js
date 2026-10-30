@@ -196,15 +196,20 @@ async function sendPaymentsEmail({ result, expenses, isLastRun }) {
   const failedN   = (c.failed ?? 0) + (i.failed ?? 0) + (x.failed ?? 0);
   const heldN     = (x.heldRecords ?? []).length;
   const errored   = !!x.error;
+  // Rows came back but none were actionable: either they are genuinely
+  // already dealt with, or our filter is wrong. Silence hid exactly that bug
+  // once, so report it rather than assume the former.
+  const allSkipped =
+    (x.skippedRecords ?? []).length > 0 && approvedN === 0 && heldN === 0 && failedN === 0;
 
   // Nothing waiting anywhere, nothing went wrong — stay quiet.
-  if (approvedN === 0 && failedN === 0 && heldN === 0 && !errored) {
+  if (approvedN === 0 && failedN === 0 && heldN === 0 && !errored && !allSkipped) {
     console.log("📭 Reached OneArvind, nothing pending — no email sent");
     return;
   }
 
   // Held claims are not failures, but they need action — so not ALL GOOD.
-  const needsYou = failedN > 0 || heldN > 0 || errored;
+  const needsYou = failedN > 0 || heldN > 0 || errored || allSkipped;
   const subject = `${needsYou ? "[PENDING]" : "[ALL GOOD]"} OneArvind · Payments & Expenses · ${date}`;
 
   // ── Expenses block ──

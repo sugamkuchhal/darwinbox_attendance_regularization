@@ -18,9 +18,10 @@ const NAV_TIMEOUT  = 60000;
 // reported for manual review.
 const AUTO_APPROVE_BELOW = 10000;
 
-// Only ever act on this exact status. Anything else is skipped, so an
-// unfamiliar status can never be approved by accident.
-const ACTIONABLE_STATUS = "pending";
+// The API reports Status as a numeric code ("1" = Pending); the grid renders
+// the word. Accept either encoding, and nothing else — an unfamiliar status is
+// still skipped rather than approved.
+const ACTIONABLE_STATUSES = ["1", "pending"];
 
 function parseAmount(v) {
   const n = Number(String(v ?? "").replace(/[^0-9.\-]/g, ""));
@@ -191,7 +192,7 @@ async function approveAllExpenses(page) {
     const eligible = [];
     for (const r of pending) {
       const status = String(r.Status ?? "").trim().toLowerCase();
-      if (status !== ACTIONABLE_STATUS) {
+      if (!ACTIONABLE_STATUSES.includes(status)) {
         result.skippedRecords.push(`${fmtRow(r)} | status "${r.Status}"`);
         continue;
       }
@@ -230,7 +231,7 @@ async function approveAllExpenses(page) {
       const still = after.some(
         (x) =>
           String(x.ExpenseID) === String(r.ExpenseID) &&
-          String(x.Status ?? "").trim().toLowerCase() === ACTIONABLE_STATUS
+          ACTIONABLE_STATUSES.includes(String(x.Status ?? "").trim().toLowerCase())
       );
 
       if (still) {
