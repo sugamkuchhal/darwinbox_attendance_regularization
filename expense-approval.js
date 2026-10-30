@@ -7,7 +7,7 @@
 // To keep that safe we work one row at a time: set exactly one row to Y, force
 // every other row back to P, submit, then re-read the list and only count it
 // approved once that row has actually left the pending set.
-const { resolveAuth } = require("./browser");
+const { newHardenedContext, enterCredentials, resolveAuth } = require("./browser");
 
 const EXPENSE_BASE = "https://expenses.onearvind.com";
 const EXPENSE_URL  = `${EXPENSE_BASE}/BusinessHead/Index/`;
@@ -131,31 +131,50 @@ async function approveAllExpenses(page) {
     skippedRecords: [],
   };
 
+  const browser = page.context().browser();
+  const context = await newHardenedContext(browser);
+  page = await context.newPage();
+
   try {
-    console.log("   ↳ opening expenses...");
-    await page.goto(EXPENSE_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
-    console.log(`   ↳ landed on: ${new URL(page.url()).hostname}`);
-
-    // expenses is a separate host from onearvind.com and runs its own OIDC
-    // round-trip, so domcontentloaded can return while we are still on
-    // Microsoft. Settle before looking for the grid.
+    // The expenses host does not inherit a session from elsewhere, and the
+    // consultant step closes its own context, so sign in here from scratch.
+    console.log("   ↳ signing in via onearvind portal...");
+    await page.goto("https://onearvind.com", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
     if (/login\.microsoft(online)?\.com/i.test(page.url())) {
-      console.log("   ↳ Microsoft sign-in detected — resolving");
-      await resolveAuth(page, { targetHost: "expenses.onearvind.com" });
+      await enterCredentials(page);
+      await resolveAuth(page, { targetHost: "onearvind.com" });
     }
-    await page
-      .waitForURL((u) => String(u).includes("expenses.onearvind.com"), {
-        timeout: 30000,
-        waitUntil: "domcontentloaded",
-      })
-      .catch(() => {});
+    console.log(`   ↳ portal: ${new URL(page.url()).hostname}`);
 
-    // The landing page is not always the dashboard after an SSO bounce.
-    if (!/\/BusinessHead\/Index/i.test(page.url())) {
-      await page.goto(EXPENSE_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    // Reach expenses through the portal's own link, which points at the ROOT.
+    // Going straight to /BusinessHead/Index/ returns Access Denied — the root
+    // is what establishes the session.
+    const link = await page.$('a[href^="https://expenses.onearvind.com"]').catch(() => null);
+    if (link) {
+      const [popup] = await Promise.all([
+        context.waitForEvent("page", { timeout: 30000 }).catch(() => null),
+        page.evaluate(() => {
+          const a = document.querySelector('a[href^="https://expenses.onearvind.com"]');
+          if (a) a.click();
+        }).catch(() => {}),
+      ]);
+      if (popup) {
+        await popup.waitForLoadState("domcontentloaded", { timeout: NAV_TIMEOUT }).catch(() => {});
+        page = popup;
+        console.log("   ↳ expenses opened via portal link");
+      }
     }
-    // Without a valid session this host serves /ArvindExpense/AccessDenied,
-    // which has no grid — name it rather than waiting 30s for a selector.
+    if (!/expenses\.onearvind\.com/i.test(page.url())) {
+      console.log("   ↳ portal link unavailable — opening expenses root directly");
+      await page.goto(EXPENSE_BASE + "/", { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    }
+    await page.waitForTimeout(2000);
+
+    // Now the Approval dashboard.
+    console.log("   ↳ opening approval dashboard...");
+    await page.goto(EXPENSE_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    console.log(`   ↳ landed on: ${new URL(page.url()).pathname}`);
+
     if (/AccessDenied/i.test(page.url())) {
       throw new Error("expenses returned Access Denied — session not established");
     }
@@ -229,6 +248,7 @@ async function approveAllExpenses(page) {
     result.error = err.message;
   }
 
+  await context.close().catch(() => {});
   console.log(
     `   ✅ Expenses: ${result.approved} approved, ${result.failed} failed, ${result.heldRecords.length} held`
   );
