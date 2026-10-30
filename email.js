@@ -5,6 +5,7 @@
 //   sendAttendanceEmail — Darwinbox: attendance + leave/TC/optional holiday
 //   sendPaymentsEmail   — OneArvind: consultant + intern payments
 const nodemailer = require("nodemailer");
+const { AUTO_APPROVE_BELOW } = require("./expense-approval");
 
 function isEmail(v) {
   return typeof v === "string" && /.+@.+\..+/.test(v.trim());
@@ -162,7 +163,7 @@ async function sendAttendanceEmail({ loginError, summary, taskApprovals }) {
 //   reached + nothing pending           -> silent
 //   never reached, and this is the last slot of the day -> FAILED
 
-async function sendPaymentsEmail({ result, isLastRun }) {
+async function sendPaymentsEmail({ result, expenses, isLastRun }) {
   const date = today();
   const reached = !!result?.loginOk;
 
@@ -173,13 +174,13 @@ async function sendPaymentsEmail({ result, isLastRun }) {
     }
     const why = cleanErr(result?.loginError || result?.error);
     await deliver(
-      `[FAILED] OneArvind · Payments · ${date}`,
+      `[FAILED] OneArvind · Payments & Expenses · ${date}`,
       [
-        `ONEARVIND · PAYMENTS · ${date}`,
+        `ONEARVIND · PAYMENTS & EXPENSES · ${date}`,
         line(), ``,
         `  ❌ Could not reach OneArvind on any attempt today`,
         `     Last error: ${why}`, ``,
-        `  Nothing was approved. Any pending payments remain pending.`, ``,
+        `  Nothing was approved. Anything pending remains pending.`, ``,
         line(),
         `Darwinbox Automation`,
       ].join("\n")
@@ -189,21 +190,56 @@ async function sendPaymentsEmail({ result, isLastRun }) {
 
   const c = result.consultants ?? {};
   const i = result.interns ?? {};
-  const approvedN = (c.approved ?? 0) + (i.approved ?? 0);
-  const failedN   = (c.failed ?? 0) + (i.failed ?? 0);
+  const x = expenses ?? {};
 
-  if (approvedN === 0 && failedN === 0) {
+  const approvedN = (c.approved ?? 0) + (i.approved ?? 0) + (x.approved ?? 0);
+  const failedN   = (c.failed ?? 0) + (i.failed ?? 0) + (x.failed ?? 0);
+  const heldN     = (x.heldRecords ?? []).length;
+  const errored   = !!x.error;
+
+  // Nothing waiting anywhere, nothing went wrong — stay quiet.
+  if (approvedN === 0 && failedN === 0 && heldN === 0 && !errored) {
     console.log("📭 Reached OneArvind, nothing pending — no email sent");
     return;
   }
 
-  const subject = `${failedN > 0 ? "[PENDING]" : "[ALL GOOD]"} OneArvind · Payments · ${date}`;
+  // Held claims are not failures, but they need action — so not ALL GOOD.
+  const needsYou = failedN > 0 || heldN > 0 || errored;
+  const subject = `${needsYou ? "[PENDING]" : "[ALL GOOD]"} OneArvind · Payments & Expenses · ${date}`;
+
+  // ── Expenses block ──
+  let expenseBlock;
+  if (!expenses) {
+    expenseBlock = `EXPENSES\n  - did not run`;
+  } else if (x.error) {
+    expenseBlock = `EXPENSES\n  ❌ Error: ${cleanErr(x.error)}`;
+  } else {
+    const l = [`EXPENSES`, `  Approved : ${x.approved ?? 0}`];
+    (x.records ?? []).forEach((r) => l.push(`  - ${r}`));
+    if (!(x.records ?? []).length) l.push("  - none");
+
+    if (heldN) {
+      l.push(``, `  Held for you : ${heldN}   (≥ ₹${AUTO_APPROVE_BELOW.toLocaleString("en-IN")} — not auto-approved)`);
+      x.heldRecords.forEach((r) => l.push(`  * ${r}`));
+    }
+    if (x.failed > 0) {
+      l.push(``, `  Failed   : ${x.failed}`);
+      (x.failedRecords ?? []).forEach((r) => l.push(`  ! ${cleanErr(r)}`));
+    }
+    if ((x.skippedRecords ?? []).length) {
+      l.push(``, `  Skipped  : ${x.skippedRecords.length}`);
+      x.skippedRecords.forEach((r) => l.push(`  - ${r}`));
+    }
+    expenseBlock = l.join("\n");
+  }
+
   const text = [
-    `ONEARVIND · PAYMENTS · ${date}`,
+    `ONEARVIND · PAYMENTS & EXPENSES · ${date}`,
     line(), ``,
     `  ✅ Signed in`, ``,
     approvalBlock("CONSULTANT PAYMENTS", c, null, payFmt), ``,
     approvalBlock("INTERN PAYMENTS", i, null, payFmt), ``,
+    expenseBlock, ``,
     line(),
     `Darwinbox Automation`,
   ].join("\n");

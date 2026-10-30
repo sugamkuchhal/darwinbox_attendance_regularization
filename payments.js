@@ -9,6 +9,7 @@ const path = require("path");
 const { USERNAME, PASSWORD } = require("./config");
 const { launchBrowser } = require("./browser");
 const { approveAllConsultants } = require("./consultant-approval");
+const { approveAllExpenses } = require("./expense-approval");
 const { sendPaymentsEmail } = require("./email");
 
 const MARKER_DIR = path.join(__dirname, ".payments-state");
@@ -57,9 +58,24 @@ async function run() {
 
   const { browser, page } = await launchBrowser();
   let result = null;
+  let expenses = null;
 
   try {
     result = await approveAllConsultants(page);
+
+    // Expenses live on a different host but behind the same sign-in, so only
+    // attempt them once OneArvind has actually been reached.
+    if (result?.loginOk) {
+      console.log(`\n${"\u2500".repeat(40)}`);
+      console.log("EXPENSES");
+      console.log(`${"\u2500".repeat(40)}`);
+      try {
+        expenses = await approveAllExpenses(page);
+      } catch (err) {
+        console.error("❌ Expenses step failed:", err.message);
+        expenses = { error: err.message };
+      }
+    }
   } catch (err) {
     console.error("❌ Payments step failed:", err.message);
     result = { loginOk: false, error: err.message };
@@ -71,7 +87,7 @@ async function run() {
   // there was anything to approve.
   if (result?.loginOk) markDoneToday();
 
-  await sendPaymentsEmail({ result, isLastRun });
+  await sendPaymentsEmail({ result, expenses, isLastRun });
 }
 
 run();
