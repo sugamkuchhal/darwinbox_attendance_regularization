@@ -7,6 +7,8 @@
 // To keep that safe we work one row at a time: set exactly one row to Y, force
 // every other row back to P, submit, then re-read the list and only count it
 // approved once that row has actually left the pending set.
+const { resolveAuth } = require("./browser");
+
 const EXPENSE_BASE = "https://expenses.onearvind.com";
 const EXPENSE_URL  = `${EXPENSE_BASE}/BusinessHead/Index/`;
 const LIST_API     = "/BusinessHead/GetHODAppDetails";
@@ -132,6 +134,31 @@ async function approveAllExpenses(page) {
   try {
     console.log("   ↳ opening expenses...");
     await page.goto(EXPENSE_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    console.log(`   ↳ landed on: ${new URL(page.url()).hostname}`);
+
+    // expenses is a separate host from onearvind.com and runs its own OIDC
+    // round-trip, so domcontentloaded can return while we are still on
+    // Microsoft. Settle before looking for the grid.
+    if (/login\.microsoft(online)?\.com/i.test(page.url())) {
+      console.log("   ↳ Microsoft sign-in detected — resolving");
+      await resolveAuth(page, { targetHost: "expenses.onearvind.com" });
+    }
+    await page
+      .waitForURL((u) => String(u).includes("expenses.onearvind.com"), {
+        timeout: 30000,
+        waitUntil: "domcontentloaded",
+      })
+      .catch(() => {});
+
+    // The landing page is not always the dashboard after an SSO bounce.
+    if (!/\/BusinessHead\/Index/i.test(page.url())) {
+      await page.goto(EXPENSE_URL, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+    }
+    // Without a valid session this host serves /ArvindExpense/AccessDenied,
+    // which has no grid — name it rather than waiting 30s for a selector.
+    if (/AccessDenied/i.test(page.url())) {
+      throw new Error("expenses returned Access Denied — session not established");
+    }
     await page.waitForSelector("#gridhod", { timeout: 30000 });
     result.reached = true;
     console.log("   ✅ Expenses dashboard loaded");
